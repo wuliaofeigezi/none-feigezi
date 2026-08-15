@@ -206,8 +206,9 @@ class RoomManager {
   // ---------- socket 事件 ----------
   handleConnection(socket) {
     socket.on('lobby:list', () => {
+      // 展示所有未满的房间（含进行中），便于中途加入
       const rooms = [...this.rooms.values()]
-        .filter((r) => r.state === 'lobby' && r.players.size < r.settings.maxPlayers)
+        .filter((r) => r.players.size < r.settings.maxPlayers)
         .map((r) => r.toPublic());
       socket.emit('lobby:list', { rooms });
     });
@@ -234,13 +235,21 @@ class RoomManager {
         return socket.emit('room:error', { code: 'WRONG_PASSWORD' });
       }
       if (room.state === 'playing') {
-        // 对局中：仅允许同 sessionId 的断线重连
-        if (room.game && room.game.resume(socket, d.sessionId)) {
+        if (!room.game) return socket.emit('room:error', { code: 'NOT_FOUND' });
+        // 断线重连：同 sessionId 恢复原玩家（分数/位置保留）
+        if (room.game.resume(socket, d.sessionId)) {
           socket.join(room.id);
           socket.emit('room:joined', { room: room.toJSON(), inGame: true });
           return;
         }
-        return socket.emit('room:error', { code: 'IN_GAME' });
+        // 中途加入：房间未满则直接进对局（新玩家入场）
+        if (room.players.size >= room.settings.maxPlayers) {
+          return socket.emit('room:error', { code: 'FULL' });
+        }
+        room.addPlayer(socket, { name: d.name, sessionId: d.sessionId });
+        room.game.attachPlayer(socket.id, { name: d.name, sessionId: d.sessionId });
+        socket.emit('room:joined', { room: room.toJSON(), inGame: true });
+        return;
       }
       if (room.players.size >= room.settings.maxPlayers) return socket.emit('room:error', { code: 'FULL' });
       room.addPlayer(socket, { name: d.name, sessionId: d.sessionId });

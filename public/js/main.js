@@ -228,6 +228,7 @@ import * as THREE from './three.module.min.js';
       <div class="room-row" data-code="${esc(r.code)}">
         <span class="code">${esc(r.code)}</span>
         <span class="meta"><b>${esc(r.name)}</b> · ${r.mode === 'zone' ? '🚩占点' : '🔫死斗'}
+          ${r.state === 'playing' ? '<span class="in-game">⚔ 进行中</span>' : ''}
           ${r.hasPassword ? '<span class="lock">🔒</span>' : ''} · 房主 ${esc(r.hostName || '?')}</span>
         <span class="count">${r.players}/${r.maxPlayers}</span>
       </div>`).join('');
@@ -1137,7 +1138,9 @@ import * as THREE from './three.module.min.js';
     socket.emit('room:create', { name: myName + ' 的房间', playerName: myName, sessionId: getSessionId() });
   });
   quickJoinBtn.addEventListener('click', () => {
-    const open = roomList.find((r) => r.state === 'lobby' && r.players < r.maxPlayers && !r.hasPassword);
+    // 优先进等待中的房间，其次可中途加入进行中的房间
+    const open = roomList.find((r) => r.state === 'lobby' && !r.hasPassword)
+      || roomList.find((r) => !r.hasPassword);
     if (open) {
       socket.emit('room:join', { code: open.code, name: myName, sessionId: getSessionId() });
     } else {
