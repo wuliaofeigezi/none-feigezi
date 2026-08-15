@@ -52,6 +52,12 @@ const CTF_ROUND_WINS = 2;        // 先赢 2 回合的队伍获胜
 const CTF_MAX_ROUNDS = 5;        // 最多 5 回合（防僵局）
 const CTF_ROUND_OVER_MS = 3500;  // 回合结束停留时间
 
+// 旗手惩罚（携带敌方旗帜时）
+const CTF_CARRIER_SPEED_MUL = 0.75;   // 移速 -25%
+const CTF_CARRIER_JUMP_MUL = 0.65;    // 跳跃 -35%
+const CTF_CARRIER_DMG_MUL = 1.5;      // 受击伤害 +50%
+const CTF_CARRIER_NO_HEAL = true;     // 不能捡血包（旗手不可回血）
+
 // FragPunk 式卡牌池：apply 修改本回合 cfg
 const CARD_POOL = [
   { id: 'speed', name: '疾风', desc: '全体移速 +50%', apply: (g) => { g.cfg.moveSpeed *= 1.5; } },
@@ -611,12 +617,14 @@ class Game {
     // 重力
     p.vel.y -= this.cfg.gravity * dt;
     if (p.vel.y < -MAX_FALL) p.vel.y = -MAX_FALL;
+    // 旗手惩罚：移速降低
+    const carrierMul = (this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_SPEED_MUL : 1;
     // 水平速度（朝向由 yaw 决定）
     const sin = Math.sin(p.yaw), cos = Math.cos(p.yaw);
     const fx = -sin, fz = -cos;
     const rx = cos, rz = -sin;
-    p.vel.x = (fx * p.input.fwd + rx * p.input.strafe) * this.cfg.moveSpeed;
-    p.vel.z = (fz * p.input.fwd + rz * p.input.strafe) * this.cfg.moveSpeed;
+    p.vel.x = (fx * p.input.fwd + rx * p.input.strafe) * this.cfg.moveSpeed * carrierMul;
+    p.vel.z = (fz * p.input.fwd + rz * p.input.strafe) * this.cfg.moveSpeed * carrierMul;
 
     const wasGrounded = p.grounded;
     p.grounded = false;
@@ -640,7 +648,8 @@ class Game {
     }
 
     if (p.input.jump && (p.grounded || wasGrounded)) {
-      p.vel.y = this.cfg.jumpVel;
+      // 旗手惩罚：跳跃降低
+      p.vel.y = this.cfg.jumpVel * ((this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_JUMP_MUL : 1);
       p.grounded = false;
     }
   }
@@ -741,7 +750,9 @@ class Game {
   }
 
   damage(victim, killerId, now) {
-    victim.health -= this.cfg.dmg;
+    // 旗手惩罚：受击伤害 +50%
+    const dmg = this.cfg.dmg * ((this.mode === 'ctf' && this.isFlagCarrier(victim.id)) ? CTF_CARRIER_DMG_MUL : 1);
+    victim.health -= dmg;
     const killer = this.players.get(killerId);
     if (victim.health <= 0) {
       victim.health = 0;
@@ -771,6 +782,8 @@ class Game {
   }
 
   checkPickups(p, now) {
+    // 旗手惩罚：不能捡血包
+    if (this.mode === 'ctf' && this.isFlagCarrier(p.id) && CTF_CARRIER_NO_HEAL) return;
     for (const pk of this.pickups) {
       if (!pk.active) continue;
       const dx = p.pos.x - pk.x, dz = p.pos.z - pk.z;
@@ -798,6 +811,7 @@ class Game {
   pubMe(p) {
     return {
       id: p.id, name: p.name, color: p.color, team: p.team,
+      carrying: this.mode === 'ctf' && this.isFlagCarrier(p.id),
       x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw,
       health: p.health, score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
       alive: p.alive, respawnIn: Math.max(0, p.respawnAt - Date.now()),
@@ -814,6 +828,7 @@ class Game {
     for (const p of this.players.values()) {
       players.push({
         id: p.id, name: p.name, color: p.color, team: p.team,
+        carrying: this.mode === 'ctf' && this.isFlagCarrier(p.id),
         x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw,
         alive: p.alive, connected: p.connected, kills: p.kills, deaths: p.deaths, score: p.score,
       });

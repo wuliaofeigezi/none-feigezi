@@ -68,6 +68,8 @@
   .ctf-round{color:#9fb3e8;font-size:12px;font-weight:400;}
   #ctfFlagStatus{margin-top:6px;font-size:13px;color:#ffe9a8;background:rgba(10,13,30,.6);border-radius:8px;
     padding:3px 10px;display:inline-block;}
+  #ctfFlagStatus.carrying{color:#ffd6a8;border:1px solid #ff9d5c;animation:ctfPulse 1s ease-in-out infinite;}
+  @keyframes ctfPulse{0%,100%{box-shadow:0 0 4px rgba(255,157,92,.4);}50%{box-shadow:0 0 14px rgba(255,157,92,.9);}}
   #ctfCardInfo{margin-top:5px;font-size:12px;color:#c9a8ff;background:rgba(10,13,30,.6);border-radius:8px;
     padding:3px 10px;display:inline-block;}
   #votePanel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:70;width:min(560px,92vw);

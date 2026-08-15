@@ -236,6 +236,12 @@ import * as THREE from './three.module.min.js';
       showBanner(w, 3000);
       beep(660, 0.2, 'triangle', 0.08);
     });
+    socket.on('ctf:flag', (d) => {
+      if (d && d.carrier && d.carrier === (me && me.id)) {
+        showBanner('🚩 你扛起了敌方旗帜！减速·易伤·不能回血，快回基地！', 4000);
+        beep(500, 0.25, 'sawtooth', 0.1);
+      }
+    });
 
     // ---------- 游戏内 ----------
     socket.on('welcome', onWelcome);
@@ -416,11 +422,18 @@ import * as THREE from './three.module.min.js';
     ctfBlueScore.textContent = '🔵 蓝 ' + (ctfState.scores[1] || 0) + ' · 胜' + (ctfState.roundWins[1] || 0);
     ctfRoundInfo.textContent = '第 ' + (ctfState.round || 0) + ' 回合';
     const myTeam = me ? me.team : null;
-    const enemy = ctfState.flags && myTeam !== null ? ctfState.flags.find((f) => f.team !== myTeam) : null;
-    if (enemy) {
-      ctfFlagStatus.textContent = enemy.atBase ? '🏳️ 敌方旗帜：在基地'
-        : enemy.carrier ? '🚩 敌方旗帜：被 ' + (enemy.carrierName || '?') + ' 夺取！'
-          : '🏳️ 敌方旗帜：掉落在地';
+    const myCarry = !!(me && ctfState.flags && ctfState.flags.some((f) => f.carrier === me.id));
+    if (myCarry) {
+      ctfFlagStatus.textContent = '🚩 你正扛着敌方旗帜！减速 25% · 受击+50% · 不能回血';
+      ctfFlagStatus.classList.add('carrying');
+    } else {
+      ctfFlagStatus.classList.remove('carrying');
+      const enemy = ctfState.flags && myTeam !== null ? ctfState.flags.find((f) => f.team !== myTeam) : null;
+      if (enemy) {
+        ctfFlagStatus.textContent = enemy.atBase ? '🏳️ 敌方旗帜：在基地'
+          : enemy.carrier ? '🚩 敌方旗帜：被 ' + (enemy.carrierName || '?') + ' 夺取！'
+            : '🏳️ 敌方旗帜：掉落在地';
+      }
     }
     ctfCardInfo.textContent = ctfState.applied
       ? '🃏 本回合卡：' + ctfState.applied.name + ' — ' + ctfState.applied.desc
@@ -519,6 +532,9 @@ import * as THREE from './three.module.min.js';
       rp.group.visible = true;
       // 死亡或断线玩家显示为半透明幽灵（不再直接消失）
       setGhost(rp, !sp.alive || sp.connected === false);
+      // 旗手高亮（全图暴露位置）
+      if (sp.carrying) { ensureCarrierRing(rp); rp.carrierRing.visible = true; }
+      else if (rp.carrierRing) rp.carrierRing.visible = false;
     }
     for (const [id, rp] of remotePlayers) {
       if (!seen.has(id)) { removeRemotePlayer(id); }
@@ -934,6 +950,19 @@ import * as THREE from './three.module.min.js';
       const child = rp.group.children[i];
       if (child && child.material) child.material.opacity = ghost ? 0.35 : 1;
     }
+  }
+
+  // 旗手头顶发光环（全图可辨）
+  function ensureCarrierRing(rp) {
+    if (rp.carrierRing) return;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.55, 0.06, 8, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.9 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 2.3;
+    rp.group.add(ring);
+    rp.carrierRing = ring;
   }
 
   function removeRemotePlayer(id) {
