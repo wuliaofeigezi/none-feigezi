@@ -250,6 +250,8 @@ class Game {
   tick() {
     if (!this.active) return;
     const now = Date.now();
+    // 全员退出/断线超时 → 直接结束对局，避免空房间泄漏
+    if (this.players.size === 0) { this.endGame(); return; }
     // 对局时长到点 → 结束
     if (now - this.startedAt >= this.durationMs) { this.endGame(); return; }
     const dt = TICK_MS / 1000;

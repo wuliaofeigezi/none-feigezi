@@ -140,6 +140,8 @@ class Room {
     // 回到大厅：重置准备状态，等待再来一局
     for (const p of this.players.values()) p.ready = false;
     this.broadcastUpdate();
+    // 空房间直接销毁，避免泄漏占用房间名额
+    if (this.players.size === 0) this.manager.destroyRoom(this.id);
   }
 
   // ---------- 序列化 ----------
