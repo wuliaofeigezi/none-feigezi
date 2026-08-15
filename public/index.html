@@ -58,6 +58,33 @@
   .toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:100;background:#2a1030;border:1px solid #b84a6f;
     color:#ffd7e4;padding:10px 18px;border-radius:10px;font-size:13px;box-shadow:0 4px 18px rgba(0,0,0,.5);}
   #connStatus{margin-top:10px;color:#8fa3d8;font-size:12px;text-align:center;}
+
+  /* ===== CTF 夺旗卡牌赛 ===== */
+  #ctfUI{position:absolute;top:14px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none;z-index:5;}
+  .ctf-top{display:flex;gap:12px;align-items:center;justify-content:center;font-size:15px;font-weight:700;
+    background:rgba(10,13,30,.72);border:1px solid #2b3a7a;border-radius:10px;padding:6px 14px;color:#fff;}
+  .ctf-red{color:#ff5c7a;text-shadow:0 0 10px rgba(255,80,120,.6);}
+  .ctf-blue{color:#5c9cff;text-shadow:0 0 10px rgba(80,140,255,.6);}
+  .ctf-round{color:#9fb3e8;font-size:12px;font-weight:400;}
+  #ctfFlagStatus{margin-top:6px;font-size:13px;color:#ffe9a8;background:rgba(10,13,30,.6);border-radius:8px;
+    padding:3px 10px;display:inline-block;}
+  #ctfCardInfo{margin-top:5px;font-size:12px;color:#c9a8ff;background:rgba(10,13,30,.6);border-radius:8px;
+    padding:3px 10px;display:inline-block;}
+  #votePanel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:70;width:min(560px,92vw);
+    background:rgba(12,16,40,.96);border:1px solid #7c5cff;border-radius:14px;padding:18px;
+    box-shadow:0 0 40px rgba(124,92,255,.35);color:#dfe6ff;}
+  .vp-head{font-size:16px;font-weight:700;color:#c9a8ff;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;}
+  #voteCountdown{font-size:15px;color:#ffe9a8;}
+  .vp-cards{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;}
+  .vp-card{flex:1;min-width:150px;padding:14px 10px;border-radius:12px;border:1px solid #4a3f8f;background:#171a3e;
+    color:#dfe6ff;cursor:pointer;transition:.15s;text-align:center;}
+  .vp-card:hover{border-color:#8f6bff;background:#1d2150;transform:translateY(-2px);}
+  .vp-card .vp-name{display:block;font-size:16px;font-weight:700;color:#ffe9a8;margin-bottom:6px;}
+  .vp-card .vp-desc{display:block;font-size:12px;color:#9fb3e8;}
+  .vp-card.vp-picked{border-color:#ffe9a8;background:#2a2a55;box-shadow:0 0 16px rgba(255,233,168,.4);}
+  .vp-status{margin-top:12px;text-align:center;font-size:13px;color:#9fb3e8;}
+  .ctf-match-result{color:#ffe9a8;font-size:15px;text-align:center;margin:10px 0 4px;font-weight:700;}
+  .ctf-team-tag{font-size:12px;margin-left:6px;}
   @media (max-width:480px){ .panel{padding:16px;} .panel h1{font-size:24px;} }
 </style>
 </head>
@@ -96,6 +123,22 @@
     <div id="fireBtn">开火</div>
     <div id="jumpBtn">跳跃</div>
   </div>
+
+  <!-- CTF 夺旗卡牌赛 UI -->
+  <div id="ctfUI" class="hidden">
+    <div class="ctf-top">
+      <span class="ctf-red" id="ctfRedScore">🔴 红 0</span>
+      <span class="ctf-round" id="ctfRoundInfo">第 1 回合</span>
+      <span class="ctf-blue" id="ctfBlueScore">🔵 蓝 0</span>
+    </div>
+    <div id="ctfFlagStatus">🏳️ 敌方旗帜：在基地</div>
+    <div id="ctfCardInfo">🃏 本回合卡：无</div>
+  </div>
+  <div id="votePanel" class="hidden">
+    <div class="vp-head">🎴 回合卡牌投票 <span id="voteCountdown"></span></div>
+    <div id="voteCards" class="vp-cards"></div>
+    <div id="voteStatus" class="vp-status"></div>
+  </div>
 </div>
 
 <!-- 大厅页 -->
@@ -132,6 +175,7 @@
         <select id="modeSelect">
           <option value="ffa">🔫 死亡竞赛</option>
           <option value="zone">🚩 占点模式</option>
+          <option value="ctf">🏳️ 夺旗卡牌赛</option>
         </select>
       </label>
       <label>人数

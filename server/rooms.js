@@ -29,7 +29,7 @@ class Room {
     this.hostId = hostSocket.id;
     this.state = 'lobby';                       // lobby | playing
     this.settings = {
-      mode: (opts && opts.mode === 'zone') ? 'zone' : 'ffa',
+      mode: (opts && opts.mode === 'zone' || opts && opts.mode === 'ctf') ? opts.mode : 'ffa',
       maxPlayers: clamp(parseInt(opts && opts.maxPlayers, 10) || DEFAULT_MAX_PLAYERS, 2, MAX_PLAYERS),
       matchMinutes: clamp(parseInt(opts && opts.matchMinutes, 10) || 5, 1, 30),
     };
@@ -90,7 +90,7 @@ class Room {
     const p = this.players.get(socketId);
     if (!p || !p.isHost || this.state !== 'lobby') return false;
     const d = data || {};
-    if (d.mode === 'zone' || d.mode === 'ffa') this.settings.mode = d.mode;
+    if (d.mode === 'zone' || d.mode === 'ffa' || d.mode === 'ctf') this.settings.mode = d.mode;
     const mp = clamp(parseInt(d.maxPlayers, 10) || this.settings.maxPlayers, 2, MAX_PLAYERS);
     if (mp >= this.players.size) this.settings.maxPlayers = mp;
     const mm = clamp(parseInt(d.matchMinutes, 10) || this.settings.matchMinutes, 1, 30);

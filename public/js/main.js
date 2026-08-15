@@ -26,6 +26,9 @@ import * as THREE from './three.module.min.js';
     fireBtn = $('fireBtn'), jumpBtn = $('jumpBtn'), touchUI = $('touchUI'),
     zoneUI = $('zoneUI'), modeLabel = $('modeLabel'),
     zonePts = $('zonePts'), zoneBarFill = $('zoneBarFill'), zoneStatus = $('zoneStatus'),
+    ctfUI = $('ctfUI'), ctfRedScore = $('ctfRedScore'), ctfBlueScore = $('ctfBlueScore'),
+    ctfRoundInfo = $('ctfRoundInfo'), ctfFlagStatus = $('ctfFlagStatus'), ctfCardInfo = $('ctfCardInfo'),
+    votePanel = $('votePanel'), voteCountdown = $('voteCountdown'), voteCards = $('voteCards'), voteStatus = $('voteStatus'),
     banner = $('banner');
 
   // ===== 常量（与服务器一致） =====
@@ -60,6 +63,12 @@ import * as THREE from './three.module.min.js';
   let lastRoomCode = null;         // 断线重连时回到的房间
   let roomList = [];               // 大厅房间列表
   let myReady = false;             // 我是否已准备
+  // ===== CTF 夺旗卡牌赛 =====
+  let ctfState = null;             // 最新 state 里的 ctf 数据
+  let myVote = -1;                 // 我投的卡下标
+  let voteEndsAt = 0;              // 投票截止时间戳
+  let flagBeacons = [];            // 旗帜 3D 标记
+  let voteTimer = null;            // 投票倒计时定时器
 
   // ===== 游戏状态 =====
   let socket = null;
@@ -197,7 +206,35 @@ import * as THREE from './three.module.min.js';
       gameOverPage.classList.add('hidden');
     });
     socket.on('game:over', (d) => {
-      showGameOver((d && d.stats) || []);
+      showGameOver(d);
+    });
+
+    // ---------- CTF 夺旗卡牌赛 ----------
+    socket.on('ctf:round', (d) => {
+      showCtfVote(d);
+    });
+    socket.on('ctf:vote', (d) => {
+      if (voteStatus) voteStatus.textContent = '已投票 ' + ((d && d.voted) || 0) + '/' + ((d && d.total) || 0) + ' 人';
+    });
+    socket.on('ctf:card', (d) => {
+      hideVote();
+      if (d && d.card) {
+        showBanner('🃏 生效卡：' + d.card.name + ' — ' + d.card.desc, 4000);
+        beep(700, 0.2, 'triangle', 0.08);
+      }
+    });
+    socket.on('ctf:play', () => {
+      showBanner('⚔ 夺旗回合开始！带回敌方旗帜到己方基地', 2500);
+    });
+    socket.on('ctf:capture', (d) => {
+      showBanner((d && d.team === 0 ? '🔴红队' : '🔵蓝队') + ' ' + ((d && d.scorerName) || '') + ' 夺旗得分！', 3000);
+      beep(880, 0.25, 'triangle', 0.1);
+    });
+    socket.on('ctf:roundEnd', (d) => {
+      const w = (d && d.winnerTeam === null) ? '本回合平局'
+        : ((d && d.winnerTeam === 0) ? '🔴红队' : '🔵蓝队') + ' 赢得本回合！';
+      showBanner(w, 3000);
+      beep(660, 0.2, 'triangle', 0.08);
     });
 
     // ---------- 游戏内 ----------
@@ -291,16 +328,22 @@ import * as THREE from './three.module.min.js';
     socket.emit('lobby:list');
   }
 
-  function showGameOver(stats) {
+  function showGameOver(data) {
     uiState = 'over';
     const myId = me && me.id;
+    const stats = (data && data.stats) || [];
+    const ctfRes = data && data.ctf;
     resetGame();
     roomPage.classList.add('hidden');
     hud.classList.add('hidden');
-    gameOverStats.innerHTML = stats.map((s, i) => `
+    const head = ctfRes
+      ? '<div class="ctf-match-result">' + (ctfRes.winnerTeam === null ? '🤝 平局' : (ctfRes.winnerTeam === 0 ? '🔴 红队' : '🔵 蓝队') + ' 获胜！')
+        + '（' + ctfRes.roundWins[0] + ' : ' + ctfRes.roundWins[1] + '）</div>'
+      : '';
+    gameOverStats.innerHTML = head + stats.map((s, i) => `
       <tr>
         <td>${i + 1}</td>
-        <td>${esc(s.name)}${s.id === myId ? '（我）' : ''}</td>
+        <td>${esc(s.name)}${ctfRes ? ' <span class="ctf-team-tag" style="color:' + (s.team === 0 ? '#ff5c7a' : '#5c9cff') + '">' + (s.team === 0 ? '🔴红' : '🔵蓝') + '</span>' : ''}${s.id === myId ? '（我）' : ''}</td>
         <td>${s.kills}</td><td>${s.deaths}</td><td>${s.score}</td>
       </tr>`).join('');
     gameOverPage.classList.remove('hidden');
@@ -315,6 +358,12 @@ import * as THREE from './three.module.min.js';
     lbList.innerHTML = '';
     deathOverlay.classList.add('hidden');
     document.exitPointerLock && document.exitPointerLock();
+    // CTF 清理
+    hideVote();
+    ctfState = null;
+    ctfUI.classList.add('hidden');
+    for (const g of flagBeacons) scene.remove(g);
+    flagBeacons = [];
   }
 
   function showToast(msg) {
@@ -323,6 +372,95 @@ import * as THREE from './three.module.min.js';
     t.textContent = msg;
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 2600);
+  }
+
+  // ---------- CTF 夺旗卡牌赛 ----------
+  function showCtfVote(d) {
+    if (!d || !d.cards || !voteCards) return;
+    myVote = -1;
+    voteEndsAt = d.voteEndsAt || 0;
+    voteCards.innerHTML = d.cards.map((c, i) => `
+      <button class="vp-card" data-i="${i}">
+        <span class="vp-name">${esc(c.name)}</span>
+        <span class="vp-desc">${esc(c.desc)}</span>
+      </button>`).join('');
+    voteCards.querySelectorAll('.vp-card').forEach((el) => {
+      el.addEventListener('click', () => {
+        if (myVote !== -1) return;
+        myVote = parseInt(el.dataset.i, 10);
+        socket.emit('vote', { card: myVote });
+        voteCards.querySelectorAll('.vp-card').forEach((b) => b.classList.toggle('vp-picked', b === el));
+        if (voteStatus) voteStatus.textContent = '已投票，等待开牌…';
+      });
+    });
+    if (voteStatus) voteStatus.textContent = '点击一张卡片投票';
+    votePanel.classList.remove('hidden');
+    clearInterval(voteTimer);
+    voteTimer = setInterval(updateVoteCountdown, 200);
+    updateVoteCountdown();
+  }
+  function updateVoteCountdown() {
+    if (!voteCountdown) return;
+    const left = Math.max(0, Math.ceil((voteEndsAt - Date.now()) / 1000));
+    voteCountdown.textContent = left + 's';
+    if (left <= 0) hideVote();
+  }
+  function hideVote() {
+    votePanel.classList.add('hidden');
+    clearInterval(voteTimer);
+  }
+  function renderCtfHud() {
+    if (!ctfState || !ctfUI) return;
+    ctfUI.classList.remove('hidden');
+    ctfRedScore.textContent = '🔴 红 ' + (ctfState.scores[0] || 0) + ' · 胜' + (ctfState.roundWins[0] || 0);
+    ctfBlueScore.textContent = '🔵 蓝 ' + (ctfState.scores[1] || 0) + ' · 胜' + (ctfState.roundWins[1] || 0);
+    ctfRoundInfo.textContent = '第 ' + (ctfState.round || 0) + ' 回合';
+    const myTeam = me ? me.team : null;
+    const enemy = ctfState.flags && myTeam !== null ? ctfState.flags.find((f) => f.team !== myTeam) : null;
+    if (enemy) {
+      ctfFlagStatus.textContent = enemy.atBase ? '🏳️ 敌方旗帜：在基地'
+        : enemy.carrier ? '🚩 敌方旗帜：被 ' + (enemy.carrierName || '?') + ' 夺取！'
+          : '🏳️ 敌方旗帜：掉落在地';
+    }
+    ctfCardInfo.textContent = ctfState.applied
+      ? '🃏 本回合卡：' + ctfState.applied.name + ' — ' + ctfState.applied.desc
+      : '🃏 本回合卡：抽卡中…';
+    updateFlagBeacons();
+  }
+  function buildFlagBeacons() {
+    if (flagBeacons.length || !scene) return;
+    const colors = [0xff3b5c, 0x3b82f6];
+    for (let i = 0; i < 2; i++) {
+      const g = new THREE.Group();
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 3.4, 6),
+        new THREE.MeshBasicMaterial({ color: 0xdddddd })
+      );
+      pole.position.y = 1.7;
+      const flag = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.9, 0.55),
+        new THREE.MeshBasicMaterial({ color: colors[i], side: THREE.DoubleSide })
+      );
+      flag.position.set(0.45, 3.1, 0);
+      const glow = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.55, 0.55, 0.06, 16),
+        new THREE.MeshBasicMaterial({ color: colors[i], transparent: true, opacity: 0.55 })
+      );
+      glow.position.y = 0.12;
+      g.add(pole, flag, glow);
+      scene.add(g);
+      flagBeacons.push(g);
+    }
+  }
+  function updateFlagBeacons() {
+    if (!ctfState || !ctfState.flags) return;
+    buildFlagBeacons();
+    ctfState.flags.forEach((f, i) => {
+      const g = flagBeacons[i];
+      if (!g) return;
+      g.visible = true;
+      g.position.set(f.x, 0, f.z);
+    });
   }
 
   function onWelcome(data) {
@@ -362,6 +500,14 @@ import * as THREE from './three.module.min.js';
     zone = payload.zone || zone;
     updateZoneMesh();
     updateZoneUI();
+    // CTF：更新 HUD 与旗帜标记；投票阶段迟到玩家补出投票面板
+    if (payload.ctf) {
+      ctfState = payload.ctf;
+      renderCtfHud();
+      if (ctfState.phase === 'vote' && ctfState.cards && votePanel.classList.contains('hidden')) {
+        showCtfVote({ cards: ctfState.cards, voteEndsAt: ctfState.voteEndsAt });
+      }
+    }
     // 远端玩家
     const seen = new Set();
     for (const sp of payload.players) {
