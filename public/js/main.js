@@ -1384,6 +1384,11 @@ import * as THREE from './three.module.min.js';
   // 输入上报（死亡期间也持续上报，服务器自动忽略；复活瞬间输入立即生效）
   setInterval(() => {
     if (!socket || !started || !me) return;
+    if (ctfVoting()) {
+      // 投票期间：人物静止、不可移动/开火/跳跃
+      socket.emit('input', { fwd: 0, strafe: 0, jump: false, fire: false, yaw, pitch });
+      return;
+    }
     socket.emit('input', {
       fwd: inputFwd(),
       strafe: inputStrafe(),
