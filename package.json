@@ -1,0 +1,23 @@
+{
+  "name": "neon-arena",
+  "version": "1.0.0",
+  "private": true,
+  "description": "霓虹竞技场 Neon Arena — 3D 联机射击游戏 (Three.js + Socket.IO)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "vendor": "node deploy/vendor.js",
+    "deploy": "node deploy/upload.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "three": "^0.165.0"
+  },
+  "devDependencies": {
+    "ssh2": "^1.15.0"
+  }
+}

@@ -1,0 +1,325 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #05070f;
+  color: #e5f6ff;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+#game { position: fixed; inset: 0; }
+#game canvas { display: block; cursor: crosshair; }
+
+.hidden { display: none !important; }
+
+/* ---------- HUD ---------- */
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+
+#crosshair {
+  position: absolute; left: 50%; top: 50%;
+  width: 8px; height: 8px; margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: rgba(125, 249, 255, 0.9);
+  box-shadow: 0 0 8px rgba(125, 249, 255, 0.9);
+}
+
+#hitmark {
+  position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+  margin: -11px 0 0 -11px;
+}
+#hitmark::before, #hitmark::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 22px; height: 2px; background: #fff;
+  box-shadow: 0 0 6px #fff;
+}
+#hitmark::before { transform: translate(-50%, -50%) rotate(45deg); }
+#hitmark::after { transform: translate(-50%, -50%) rotate(-45deg); }
+
+#healthWrap {
+  position: absolute; left: 50%; bottom: 46px; transform: translateX(-50%);
+  width: 320px; height: 18px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(125, 249, 255, 0.5);
+  border-radius: 10px;
+  overflow: hidden;
+}
+#healthBar {
+  height: 100%; width: 100%;
+  background: linear-gradient(90deg, #22d3ee, #10b981);
+  transition: width 0.2s;
+}
+#healthText {
+  position: absolute; inset: 0; text-align: center;
+  line-height: 18px; font-size: 12px; font-weight: 700;
+  text-shadow: 0 0 4px #000;
+}
+
+#cooldown {
+  position: absolute; left: 50%; bottom: 74px; transform: translateX(-50%);
+  width: 46px; height: 46px;
+  border: 3px solid rgba(255, 89, 94, 0.8);
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(255, 89, 94, 0.5);
+  transition: transform 0.05s linear;
+}
+
+#scoreWrap {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  padding: 6px 18px;
+  background: rgba(5, 10, 25, 0.7);
+  border: 1px solid rgba(125, 249, 255, 0.35);
+  border-radius: 20px;
+  font-size: 14px;
+}
+#scoreWrap b { color: #7df9ff; }
+
+#leaderboard {
+  position: absolute; top: 14px; right: 14px;
+  width: 210px;
+  background: rgba(5, 10, 25, 0.72);
+  border: 1px solid rgba(125, 249, 255, 0.3);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.lb-title { color: #7df9ff; font-weight: 700; margin-bottom: 6px; letter-spacing: 1px; }
+#lbList .row {
+  display: flex; justify-content: space-between; gap: 6px;
+  padding: 2px 0;
+  white-space: nowrap;
+}
+#lbList .row .nm { overflow: hidden; text-overflow: ellipsis; }
+#lbList .row.me { color: #ffe066; font-weight: 700; }
+#lbList .row .kd { color: #8fa3c8; }
+
+#killfeed {
+  position: absolute; left: 14px; top: 14px;
+  width: 280px; font-size: 13px;
+}
+#killfeed .kf-item {
+  margin-bottom: 4px; padding: 4px 10px;
+  background: rgba(5, 10, 25, 0.72);
+  border-left: 3px solid #7df9ff;
+  border-radius: 4px;
+  animation: kf-in 0.25s ease-out;
+}
+@keyframes kf-in {
+  from { opacity: 0; transform: translateX(-14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+#killfeed .kf-item .k { color: #ff5b6e; font-weight: 700; }
+#killfeed .kf-item .v { color: #9db4d8; }
+
+#deathOverlay {
+  position: absolute; inset: 0;
+  background: rgba(60, 0, 10, 0.45);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px;
+}
+#deathText { font-size: 26px; font-weight: 800; color: #ff5b6e; text-shadow: 0 0 14px rgba(255, 60, 90, 0.8); }
+#respawnText { font-size: 18px; color: #b8cbe8; }
+
+#lookHint {
+  position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+  padding: 8px 18px;
+  background: rgba(5, 10, 25, 0.78);
+  border: 1px solid rgba(125, 249, 255, 0.45);
+  border-radius: 20px;
+  font-size: 14px;
+  color: #7df9ff;
+  white-space: nowrap;
+  animation: kf-in 0.3s ease-out;
+  pointer-events: none;
+}
+
+/* ---------- 占点模式 HUD ---------- */
+#zoneUI {
+  position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+  width: 240px; text-align: center;
+  pointer-events: none;
+}
+#modeLabel {
+  font-size: 15px; font-weight: 800; letter-spacing: 2px;
+  color: #ffd65a; text-shadow: 0 0 10px rgba(255, 214, 90, 0.7);
+  margin-bottom: 4px;
+}
+#zoneScore { font-size: 13px; color: #cfe6ff; margin-bottom: 4px; }
+#zoneScore b { color: #ffd65a; font-size: 16px; }
+#zoneBar {
+  width: 100%; height: 8px; margin: 0 auto 6px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 214, 90, 0.4);
+  border-radius: 5px; overflow: hidden;
+}
+#zoneBarFill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #ffd65a, #ff8a3c);
+  transition: width 0.2s;
+}
+#zoneStatus {
+  font-size: 13px; color: #9db4d8;
+}
+#zoneStatus.own { color: #7dff9a; font-weight: 700; text-shadow: 0 0 8px rgba(125, 255, 154, 0.6); }
+
+/* ---------- 全屏公告 ---------- */
+#banner {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+  padding: 14px 34px;
+  background: rgba(5, 10, 25, 0.82);
+  border: 1px solid rgba(255, 214, 90, 0.55);
+  border-radius: 12px;
+  font-size: 24px; font-weight: 800;
+  color: #ffd65a;
+  text-shadow: 0 0 16px rgba(255, 214, 90, 0.6);
+  pointer-events: none;
+  animation: kf-in 0.3s ease-out;
+}
+
+#app { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; transform-origin: 50% 50%; }
+/* 手机端自动横屏：竖屏时整体旋转 90°，以横屏尺寸渲染 */
+#app.rotated {
+  left: 50%; top: 50%;
+  width: 100vh; height: 100vw;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+/* ---------- 手机端触控 ---------- */
+#touchUI { position: absolute; inset: 0; z-index: 12; pointer-events: none; }
+
+#joyBase {
+  display: none;
+  position: absolute; left: 0; top: 0;
+  width: 132px; height: 132px;
+  border-radius: 50%;
+  border: 2px solid rgba(125, 249, 255, 0.35);
+  background: radial-gradient(circle, rgba(125, 249, 255, 0.12), rgba(125, 249, 255, 0.03));
+  transform: translate(-50%, -50%);
+}
+#joyKnob {
+  position: absolute; left: 50%; top: 50%;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(200, 253, 255, 0.9), rgba(34, 211, 238, 0.65));
+  box-shadow: 0 0 14px rgba(125, 249, 255, 0.5);
+  transform: translate(-50%, -50%);
+}
+
+#fireBtn {
+  position: absolute; right: 26px; bottom: 44px;
+  width: 88px; height: 88px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 120, 130, 0.55);
+  background: radial-gradient(circle, rgba(255, 70, 90, 0.35), rgba(255, 70, 90, 0.12));
+  color: #ffd7db;
+  font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 18px rgba(255, 70, 90, 0.25);
+  pointer-events: none; /* 纯视觉，触控由统一状态机处理 */
+  touch-action: none;
+}
+
+#jumpBtn {
+  position: absolute; right: 132px; bottom: 118px;
+  width: 66px; height: 66px;
+  border-radius: 50%;
+  border: 2px solid rgba(125, 249, 255, 0.55);
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.3), rgba(34, 211, 238, 0.1));
+  color: #c9fbff;
+  font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.25);
+  pointer-events: none; /* 纯视觉，触控由统一状态机处理 */
+  touch-action: none;
+}
+
+/* 手机端菜单适配 */
+@media (max-width: 900px) {
+  .menu-box { padding: 28px 22px; }
+  .menu-box h1 { font-size: 30px; }
+}
+
+/* ---------- 菜单 ---------- */
+#menu {
+  position: fixed; inset: 0; z-index: 20;
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(34, 211, 238, 0.18), transparent 55%),
+    radial-gradient(ellipse at 75% 75%, rgba(168, 85, 247, 0.18), transparent 55%),
+    #05070f;
+  display: flex; align-items: center; justify-content: center;
+}
+.menu-box {
+  width: 420px; max-width: 92vw;
+  text-align: center;
+  padding: 40px 36px;
+  background: rgba(8, 14, 32, 0.85);
+  border: 1px solid rgba(125, 249, 255, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 0 40px rgba(34, 211, 238, 0.25);
+}
+.menu-box h1 {
+  font-size: 38px; letter-spacing: 4px;
+  color: #7df9ff;
+  text-shadow: 0 0 18px rgba(125, 249, 255, 0.7);
+}
+.menu-box h1 span {
+  display: block; font-size: 15px; letter-spacing: 8px; color: #a855f7;
+  margin-top: 4px; text-shadow: 0 0 12px rgba(168, 85, 247, 0.8);
+}
+.menu-box .sub { margin: 12px 0 22px; color: #8fa3c8; font-size: 14px; }
+.menu-box input {
+  width: 100%; padding: 12px 14px;
+  font-size: 16px; text-align: center;
+  color: #e5f6ff;
+  background: rgba(20, 30, 60, 0.8);
+  border: 1px solid rgba(125, 249, 255, 0.4);
+  border-radius: 8px;
+  outline: none;
+  margin-bottom: 14px;
+}
+.menu-box input:focus { border-color: #7df9ff; box-shadow: 0 0 10px rgba(125, 249, 255, 0.4); }
+#modeSel {
+  display: flex; gap: 10px; margin-bottom: 14px;
+}
+.mode-btn {
+  flex: 1; padding: 10px;
+  font-size: 14px; font-weight: 700;
+  color: #9db4d8;
+  background: rgba(20, 30, 60, 0.7);
+  border: 1px solid rgba(125, 249, 255, 0.25);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.mode-btn.active {
+  color: #04121a;
+  background: linear-gradient(90deg, #22d3ee, #7df9ff);
+  border-color: #7df9ff;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.4);
+}
+.menu-box #startBtn {
+  width: 100%; padding: 13px;
+  font-size: 17px; font-weight: 700; letter-spacing: 6px;
+  color: #04121a;
+  background: linear-gradient(90deg, #22d3ee, #7df9ff);
+  border: none; border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.2s;
+}
+.menu-box #startBtn:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(34, 211, 238, 0.5); }
+.menu-box #startBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.help {
+  margin-top: 20px; padding: 12px;
+  font-size: 13px; line-height: 1.9;
+  color: #9db4d8;
+  background: rgba(20, 30, 60, 0.5);
+  border-radius: 8px;
+}
+.help b { color: #7df9ff; }
+.help .hp { color: #ff6b81; font-weight: 700; }
+#connStatus { margin-top: 14px; font-size: 13px; color: #8fa3c8; }

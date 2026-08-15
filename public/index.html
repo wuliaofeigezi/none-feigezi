@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
+<title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
+<link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+<div id="app">
+<div id="game"></div>
+
+<div id="hud" class="hidden">
+  <div id="crosshair"></div>
+  <div id="hitmark" class="hidden"></div>
+  <div id="healthWrap">
+    <div id="healthBar"></div>
+    <span id="healthText">100</span>
+  </div>
+  <div id="cooldown" class="hidden"></div>
+  <div id="scoreWrap">击杀 <b id="kills">0</b> · 死亡 <b id="deaths">0</b> · 延迟 <b id="ping">--</b>ms</div>
+  <div id="zoneUI" class="hidden">
+    <div id="modeLabel">占点模式</div>
+    <div id="zoneScore">积分 <b id="zonePts">0</b> / 120</div>
+    <div id="zoneBar"><div id="zoneBarFill"></div></div>
+    <div id="zoneStatus">前往占领区</div>
+  </div>
+  <div id="banner" class="hidden"></div>
+  <div id="leaderboard">
+    <div class="lb-title">🏆 排行榜</div>
+    <div id="lbList"></div>
+  </div>
+  <div id="killfeed"></div>
+  <div id="deathOverlay" class="hidden">
+    <div id="deathText"></div>
+    <div id="respawnText"></div>
+  </div>
+  <div id="lookHint" class="hidden"></div>
+  <div id="touchUI" class="hidden">
+    <div id="joyBase"><div id="joyKnob"></div></div>
+    <div id="fireBtn">开火</div>
+    <div id="jumpBtn">跳跃</div>
+  </div>
+</div>
+
+<div id="menu">
+  <div class="menu-box">
+    <h1>霓虹竞技场<span>NEON ARENA</span></h1>
+    <p class="sub">3D 联机射击 · 服务器混战</p>
+    <input id="nameInput" maxlength="16" placeholder="输入你的名字" value="玩家"/>
+    <div id="modeSel">
+      <button id="modeFfa" class="mode-btn active">🔫 死亡竞赛</button>
+      <button id="modeZone" class="mode-btn">🚩 占点模式</button>
+    </div>
+    <button id="startBtn">开始游戏</button>
+    <div class="help" id="helpText">
+      <b>操作</b>：WASD 移动 · 点击画面锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃<br/>
+      若锁定不可用：按住<b>鼠标右键拖拽</b>旋转视角。💡 四角发光传送台可弹射上天，中央高台是制高点
+    </div>
+    <div id="connStatus">正在连接服务器…</div>
+  </div>
+</div>
+</div>
+
+<script src="js/socket.io.min.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+node_modules/
+deploy/creds.json
+.npm-cache/
+*.log
+.DS_Store
