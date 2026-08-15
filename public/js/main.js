@@ -111,10 +111,11 @@ import * as THREE from './three.module.min.js';
   function getSessionId() {
     if (mySessionId) return mySessionId;
     try {
-      let s = localStorage.getItem('neon_arena_sid');
+      // 用 sessionStorage：每个标签页独立身份（同浏览器多标签测试=多玩家），刷新同标签仍保留
+      let s = sessionStorage.getItem('neon_arena_sid');
       if (!s) {
         s = 'sid_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
-        localStorage.setItem('neon_arena_sid', s);
+        sessionStorage.setItem('neon_arena_sid', s);
       }
       mySessionId = s;
     } catch (e) {

@@ -347,12 +347,13 @@ class Game {
     if (this.ctf.phase !== 'vote') return;
     const card = data && data.card;
     if (!Number.isInteger(card) || card < 0 || card >= this.ctf.cards.length) return;
+    // 以连接(playerId)为投票身份：同一浏览器多标签=多票（sessionId 会跨标签共享）
     const now = Date.now();
-    const lastAt = this.ctf.voteAt.get(p.sessionId) || 0;
+    const lastAt = this.ctf.voteAt.get(playerId) || 0;
     // 已投过且未过冷却：不可改选
-    if (this.ctf.votes.has(p.sessionId) && now - lastAt < CTF_VOTE_CHANGE_MS) return;
-    this.ctf.votes.set(p.sessionId, card);
-    this.ctf.voteAt.set(p.sessionId, now);
+    if (this.ctf.votes.has(playerId) && now - lastAt < CTF_VOTE_CHANGE_MS) return;
+    this.ctf.votes.set(playerId, card);
+    this.ctf.voteAt.set(playerId, now);
     // 广播每张卡当前票数（供客户端实时反馈）
     const tally = [0, 0, 0];
     for (const idx of this.ctf.votes.values()) tally[idx]++;
