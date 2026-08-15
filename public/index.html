@@ -19,6 +19,7 @@
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
   .panel input[type=text],.panel input:not([type]){flex:1;min-width:120px;padding:9px 12px;border-radius:8px;border:1px solid #33408f;
     background:#0d1028;color:#fff;outline:none;font-size:14px;}
+  .row select{padding:8px 10px;border-radius:8px;border:1px solid #33408f;background:#0d1028;color:#cfe0ff;outline:none;font-size:13px;}
   .panel input:focus{border-color:#4f6bff;}
   .btn{padding:9px 14px;border-radius:8px;border:1px solid #33408f;background:#12173a;color:#cfe0ff;cursor:pointer;font-size:13px;transition:.15s;}
   .btn:hover{border-color:#4f6bff;color:#fff;}
@@ -159,6 +160,11 @@
     <p class="sub">3D 联机射击 · 房间大厅</p>
     <div class="row">
       <input id="lobbyName" maxlength="16" placeholder="输入你的名字" value="玩家"/>
+      <select id="createModeSelect" title="创建房间的默认模式">
+        <option value="ffa">🔫 死斗</option>
+        <option value="zone">🚩 占点</option>
+        <option value="ctf">🏳️ 夺旗卡牌</option>
+      </select>
       <button id="createRoomBtn" class="btn btn-primary">＋ 创建房间</button>
       <button id="quickJoinBtn" class="btn">⚡ 快速加入</button>
       <button id="refreshRoomsBtn" class="btn">🔄 刷新</button>

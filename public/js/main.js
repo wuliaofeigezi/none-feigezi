@@ -10,7 +10,8 @@ import * as THREE from './three.module.min.js';
     lobbyPage = $('lobbyPage'), roomPage = $('roomPage'), gameOverPage = $('gameOverPage'),
     lobbyName = $('lobbyName'), connStatus = $('connStatus'),
     roomListEl = $('roomList'),
-    createRoomBtn = $('createRoomBtn'), quickJoinBtn = $('quickJoinBtn'), refreshRoomsBtn = $('refreshRoomsBtn'),
+    createRoomBtn = $('createRoomBtn'), createModeSelect = $('createModeSelect'),
+    quickJoinBtn = $('quickJoinBtn'), refreshRoomsBtn = $('refreshRoomsBtn'),
     roomTitle = $('roomTitle'), roomCode = $('roomCode'), copyCodeBtn = $('copyCodeBtn'),
     leaveRoomBtn = $('leaveRoomBtn'), roomSettings = $('roomSettings'),
     modeSelect = $('modeSelect'), maxSelect = $('maxSelect'), minutesSelect = $('minutesSelect'),
@@ -277,14 +278,17 @@ import * as THREE from './three.module.min.js';
       roomListEl.innerHTML = '<div class="empty-tip">暂无房间，点「＋ 创建房间」开一局吧</div>';
       return;
     }
-    roomListEl.innerHTML = roomList.map((r) => `
+    roomListEl.innerHTML = roomList.map((r) => {
+      const modeTxt = r.mode === 'zone' ? '🚩占点' : r.mode === 'ctf' ? '🏳️夺旗卡牌' : '🔫死斗';
+      return `
       <div class="room-row" data-code="${esc(r.code)}">
         <span class="code">${esc(r.code)}</span>
-        <span class="meta"><b>${esc(r.name)}</b> · ${r.mode === 'zone' ? '🚩占点' : '🔫死斗'}
+        <span class="meta"><b>${esc(r.name)}</b> · ${modeTxt}
           ${r.state === 'playing' ? '<span class="in-game">⚔ 进行中</span>' : ''}
           ${r.hasPassword ? '<span class="lock">🔒</span>' : ''} · 房主 ${esc(r.hostName || '?')}</span>
         <span class="count">${r.players}/${r.maxPlayers}</span>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     roomListEl.querySelectorAll('.room-row').forEach((el) => {
       el.addEventListener('click', () => {
         socket.emit('room:join', { code: el.dataset.code, name: myName, sessionId: getSessionId() });
@@ -1346,7 +1350,12 @@ import * as THREE from './three.module.min.js';
   });
   createRoomBtn.addEventListener('click', () => {
     myName = (lobbyName.value || '玩家').trim().slice(0, 16);
-    socket.emit('room:create', { name: myName + ' 的房间', playerName: myName, sessionId: getSessionId() });
+    socket.emit('room:create', {
+      name: myName + ' 的房间',
+      playerName: myName,
+      sessionId: getSessionId(),
+      mode: createModeSelect ? createModeSelect.value : 'ffa',
+    });
   });
   quickJoinBtn.addEventListener('click', () => {
     // 优先进等待中的房间，其次可中途加入进行中的房间
