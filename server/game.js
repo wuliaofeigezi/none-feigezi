@@ -348,7 +348,10 @@ class Game {
     if (!Number.isInteger(card) || card < 0 || card >= this.ctf.cards.length) return;
     if (this.ctf.votes.has(p.sessionId)) return; // 每人一票
     this.ctf.votes.set(p.sessionId, card);
-    this.emit('ctf:vote', { voted: this.ctf.votes.size, total: this.players.size });
+    // 广播每张卡当前票数（供客户端实时反馈）
+    const tally = [0, 0, 0];
+    for (const idx of this.ctf.votes.values()) tally[idx]++;
+    this.emit('ctf:vote', { tally, voted: this.ctf.votes.size, total: this.players.size });
   }
 
   startCtfRound() {

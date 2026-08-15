@@ -81,9 +81,16 @@
   .vp-card{flex:1;min-width:150px;padding:14px 10px;border-radius:12px;border:1px solid #4a3f8f;background:#171a3e;
     color:#dfe6ff;cursor:pointer;transition:.15s;text-align:center;}
   .vp-card:hover{border-color:#8f6bff;background:#1d2150;transform:translateY(-2px);}
+  .vp-card:active{transform:scale(.96);}
   .vp-card .vp-name{display:block;font-size:16px;font-weight:700;color:#ffe9a8;margin-bottom:6px;}
   .vp-card .vp-desc{display:block;font-size:12px;color:#9fb3e8;}
+  .vp-card .vp-votes{display:block;margin-top:9px;font-size:12px;color:#7df9ff;}
   .vp-card.vp-picked{border-color:#ffe9a8;background:#2a2a55;box-shadow:0 0 16px rgba(255,233,168,.4);}
+  .vp-card.vp-picked .vp-name::after{content:' ✓';color:#ffe9a8;}
+  .vp-card.vp-picked .vp-votes{color:#ffe9a8;font-weight:700;}
+  .vp-card.vp-dim{opacity:.4;}
+  .vp-card.vp-pop{animation:vpPop .32s ease;}
+  @keyframes vpPop{0%{transform:scale(1);}40%{transform:scale(1.14);}100%{transform:scale(1);}}
   .vp-status{margin-top:12px;text-align:center;font-size:13px;color:#9fb3e8;}
   .ctf-match-result{color:#ffe9a8;font-size:15px;text-align:center;margin:10px 0 4px;font-weight:700;}
   .ctf-team-tag{font-size:12px;margin-left:6px;}

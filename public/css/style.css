@@ -70,7 +70,7 @@ html, body {
 }
 
 #scoreWrap {
-  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: 14px; left: 14px;
   padding: 6px 18px;
   background: rgba(5, 10, 25, 0.7);
   border: 1px solid rgba(125, 249, 255, 0.35);

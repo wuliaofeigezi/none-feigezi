@@ -214,6 +214,13 @@ import * as THREE from './three.module.min.js';
       showCtfVote(d);
     });
     socket.on('ctf:vote', (d) => {
+      const tally = (d && d.tally) || [];
+      if (voteCards) {
+        voteCards.querySelectorAll('.vp-card').forEach((b, i) => {
+          const span = b.querySelector('.vp-votes');
+          if (span) span.textContent = (tally[i] || 0) + ' 票';
+        });
+      }
       if (voteStatus) voteStatus.textContent = '已投票 ' + ((d && d.voted) || 0) + '/' + ((d && d.total) || 0) + ' 人';
     });
     socket.on('ctf:card', (d) => {
@@ -389,13 +396,19 @@ import * as THREE from './three.module.min.js';
       <button class="vp-card" data-i="${i}">
         <span class="vp-name">${esc(c.name)}</span>
         <span class="vp-desc">${esc(c.desc)}</span>
+        <span class="vp-votes" data-votes="${i}">0 票</span>
       </button>`).join('');
     voteCards.querySelectorAll('.vp-card').forEach((el) => {
       el.addEventListener('click', () => {
         if (myVote !== -1) return;
         myVote = parseInt(el.dataset.i, 10);
         socket.emit('vote', { card: myVote });
-        voteCards.querySelectorAll('.vp-card').forEach((b) => b.classList.toggle('vp-picked', b === el));
+        voteCards.querySelectorAll('.vp-card').forEach((b) => {
+          b.classList.toggle('vp-picked', b === el);
+          if (b !== el) b.classList.add('vp-dim');
+        });
+        el.classList.add('vp-pop'); // 点击弹跳反馈
+        setTimeout(() => el.classList.remove('vp-pop'), 320);
         if (voteStatus) voteStatus.textContent = '已投票，等待开牌…';
       });
     });
