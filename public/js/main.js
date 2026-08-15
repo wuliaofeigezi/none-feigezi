@@ -388,10 +388,16 @@ import * as THREE from './three.module.min.js';
   }
 
   // ---------- CTF 夺旗卡牌赛 ----------
+  // 投票面板可见时（UI 覆盖层），暂停游戏鼠标/触摸控制，避免与点卡片冲突
+  function ctfVoting() {
+    return !!(votePanel && !votePanel.classList.contains('hidden'));
+  }
   function showCtfVote(d) {
     if (!d || !d.cards || !voteCards) return;
     myVote = -1;
     voteEndsAt = d.voteEndsAt || 0;
+    // 释放鼠标指针锁定，让玩家能自由点击卡片投票
+    document.exitPointerLock && document.exitPointerLock();
     voteCards.innerHTML = d.cards.map((c, i) => `
       <button class="vp-card" data-i="${i}">
         <span class="vp-name">${esc(c.name)}</span>
@@ -427,6 +433,8 @@ import * as THREE from './three.module.min.js';
   function hideVote() {
     votePanel.classList.add('hidden');
     clearInterval(voteTimer);
+    fire = false;
+    touchFire = false;
   }
   function renderCtfHud() {
     if (!ctfState || !ctfUI) return;
@@ -855,7 +863,7 @@ import * as THREE from './three.module.min.js';
     scene.add(zoneRing);
 
     renderer.domElement.addEventListener('click', () => {
-      if (isTouch || !started || document.pointerLockElement === renderer.domElement) return;
+      if (isTouch || !started || ctfVoting() || document.pointerLockElement === renderer.domElement) return;
       if (performance.now() - lastLockFail < 2000) return;
       try { renderer.domElement.requestPointerLock(); } catch (e) { /* ignore */ }
     });
@@ -1185,7 +1193,7 @@ import * as THREE from './three.module.min.js';
   });
   document.addEventListener('keyup', (e) => { keys[e.code] = false; });
   document.addEventListener('mousedown', (e) => {
-    if (isTouch || e.button !== 0 || !started) return;
+    if (isTouch || e.button !== 0 || !started || ctfVoting()) return;
     fire = true;
     if (performance.now() - lastShotAt >= FIRE_CD) {
       lastShotAt = performance.now();
@@ -1194,7 +1202,7 @@ import * as THREE from './three.module.min.js';
   });
   document.addEventListener('mouseup', (e) => { if (!isTouch && e.button === 0) fire = false; });
   document.addEventListener('mousemove', (e) => {
-    if (isTouch || !started) return;
+    if (isTouch || !started || ctfVoting()) return;
     let dx = 0, dy = 0;
     if (document.pointerLockElement === renderer.domElement) {
       // CS:GO 模式：指针锁定，原始位移增量，指哪转哪
@@ -1211,7 +1219,7 @@ import * as THREE from './three.module.min.js';
   });
   document.addEventListener('contextmenu', (e) => { if (started) e.preventDefault(); });
   document.addEventListener('pointerlockchange', () => {
-    if (!started || isTouch) return;
+    if (!started || isTouch || ctfVoting()) return;
     const locked = document.pointerLockElement === renderer.domElement;
     if (locked) showHint('已锁定鼠标 · 移动鼠标旋转视角 · ESC 解锁', 2000);
     else showHint('点击画面重新锁定（CS:GO 视角）· 右键拖拽也可转视角', 4000);
@@ -1224,7 +1232,7 @@ import * as THREE from './three.module.min.js';
 
   // ---------- 触屏操作（类和平精英，统一触摸状态机） ----------
   document.addEventListener('touchstart', (e) => {
-    if (!started) return;
+    if (!started || ctfVoting()) return; // 投票时让 UI 按钮可点，不拦截触摸
     e.preventDefault();
     const gw = gameSize().w, gh = gameSize().h;
     for (const t of e.changedTouches) {
