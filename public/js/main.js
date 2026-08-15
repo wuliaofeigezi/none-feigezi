@@ -584,14 +584,15 @@ import * as THREE from './three.module.min.js';
       for (const sp of payload.players) {
         if (sp.id !== me.id) continue;
         me.score = sp.score; me.kills = sp.kills; me.deaths = sp.deaths;
+        me.carrying = !!sp.carrying; me.team = sp.team; // 同步旗手状态（本地预测需用它减速）
         if (me.alive) {
           serverTarget.set(sp.x, sp.y, sp.z);
           const dx = sp.x - myPos.x, dy = sp.y - myPos.y, dz = sp.z - myPos.z;
-          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          const distXZ = Math.hypot(dx, dz);
+          const distY = Math.abs(dy);
           const speed3d = Math.hypot(myVel.x, myVel.y, myVel.z);
-          // 移动中（含竖直方向：跳台弹射/下落）保留延迟余量，避免抖动；
-          // 仅接近静止时做小偏差贴合，大幅偏差才硬贴合
-          const needSnap = dist > 2.5 || (speed3d < 0.8 && dist > 0.35);
+          // 水平小偏差贴合；竖直方向（跳起/落地顶点）给更大容差，避免原地跳跃闪回
+          const needSnap = distXZ > 2.5 || distY > 3.0 || (speed3d < 0.8 && distXZ > 0.35);
           if (needSnap) {
             myPos.x = sp.x; myPos.y = sp.y; myPos.z = sp.z;
             myVel.x = 0; myVel.y = 0; myVel.z = 0;
