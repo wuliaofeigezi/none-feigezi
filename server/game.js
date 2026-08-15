@@ -1,5 +1,6 @@
 'use strict';
 // 霓虹竞技场 — 服务器权威游戏逻辑（20Hz 状态同步）
+// 按房间作用域运行：每个房间一个 Game 实例，广播只发到本房间（io.to(roomId)）
 const { MAP } = require('./map');
 
 const TICK_MS = 50; // 20 Hz
@@ -68,8 +69,18 @@ function sanitizeName(raw) {
 }
 
 class Game {
-  constructor(io) {
+  constructor(io, roomId, settings, hooks) {
     this.io = io;
+    this.roomId = roomId;
+    this.settings = settings || {};
+    this.hooks = hooks || {};
+    // 房间作用域广播
+    this.emit = (ev, data) => io.to(roomId).emit(ev, data);
+
+    this.maxPlayers = clamp(parseInt(this.settings.maxPlayers, 10) || MAX_PLAYERS, 1, MAX_PLAYERS);
+    this.mode = this.settings.mode === 'zone' ? 'zone' : 'ffa';
+    this.durationMs = (parseInt(this.settings.matchMinutes, 10) || 5) * 60 * 1000;
+
     this.players = new Map();
     this.projectiles = [];
     this.killfeed = [];
@@ -77,110 +88,93 @@ class Game {
       id: i, x: p.x, z: p.z, type: 'health', active: true, respawnAt: 0,
     }));
     this.timer = null;
-    this.mode = 'ffa'; // ffa 死亡竞赛 | zone 占点模式
-    this.modeVotes = new Map(); // sessionId -> 'ffa'|'zone'（模式投票）
-    this.lastModeSwitch = 0;     // 上次切换模式时间戳（冷却 30s）
+    this.active = true;   // 对局进行中（结束后忽略后续输入）
+    this.startedAt = 0;
+    this._ended = false;
     this.zone = { spot: 0, x: ZONE_SPOTS[0].x, z: ZONE_SPOTS[0].z, y: ZONE_SPOTS[0].y, r: ZONE_R, nextMoveAt: 0 };
   }
 
-  start() {
+  // ---------- 对局生命周期 ----------
+  // seeds: [{ socketId, name, sessionId }]（来自房间成员）
+  start(seeds) {
+    for (const s of seeds) this.attachPlayer(s.socketId, s);
+    this.startedAt = Date.now();
     this.timer = setInterval(() => this.tick(), TICK_MS);
-    this.timer.unref && this.timer.unref();
+    if (this.timer.unref) this.timer.unref();
     this.zone.nextMoveAt = Date.now() + ZONE_MOVE_MS;
-    this.io.on('connection', (socket) => this.onConnect(socket));
-    console.log(`[neon-arena] game loop started (${TICK_MS}ms), max ${MAX_PLAYERS} players`);
+    console.log(`[neon-arena][${this.roomId}] 对局开始 ${this.mode} 人数上限 ${this.maxPlayers} 时长 ${this.durationMs / 60000}min`);
   }
 
-  // ---------- connection ----------
-  onConnect(socket) {
-    if (this.players.size >= MAX_PLAYERS) {
-      socket.emit('full');
-      socket.disconnect(true);
-      return;
+  // 对局开始时把房间成员接入游戏
+  attachPlayer(socketId, seed) {
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) return null;
+    socket.join(this.roomId);
+    const p = this.createPlayer(socketId, seed);
+    this.players.set(socketId, p);
+    this.bindSocket(socket, p);
+    socket.emit('welcome', {
+      id: p.id, name: p.name, color: p.color,
+      map: MAP, self: this.pubMe(p), resumed: false, mode: this.mode,
+    });
+    this.sendMe(p);
+    this.emit('playerJoined', { id: p.id, name: p.name });
+    console.log(`[neon-arena][${this.roomId}] [+] ${p.name} joined (${this.players.size}/${this.maxPlayers})`);
+    return p;
+  }
+
+  // 对局中断线重连：同 sessionId 恢复原玩家（分数/位置/血量全保留）
+  resume(socket, sessionId) {
+    if (!sessionId || !this.active) return false;
+    for (const [oldId, p] of this.players) {
+      if (p.sessionId !== sessionId || p.connected) continue;
+      this.players.delete(oldId);
+      const oldSock = this.io.sockets.sockets.get(oldId);
+      if (oldSock && oldSock.id !== socket.id) oldSock.disconnect(true); // 踢掉旧连接
+      p.id = socket.id;
+      p.connected = true;
+      p.leftAt = 0;
+      p.input = { fwd: 0, strafe: 0, jump: false, fire: false };
+      this.players.set(socket.id, p);
+      socket.join(this.roomId);
+      this.bindSocket(socket, p);
+      socket.emit('welcome', {
+        id: p.id, name: p.name, color: p.color,
+        map: MAP, self: this.pubMe(p), resumed: true, mode: this.mode,
+      });
+      this.sendMe(p);
+      console.log(`[neon-arena][${this.roomId}] [↻] ${p.name} 恢复连接`);
+      return true;
     }
-    socket.on('join', (data) => this.onJoin(socket, data));
-    socket.on('input', (data) => this.onInput(socket, data));
-    socket.on('vote', (data) => this.onVote(socket, data));
-    socket.on('ping', (cb) => { if (typeof cb === 'function') cb(Date.now()); });
-    socket.on('disconnect', () => this.onLeave(socket.id));
+    return false;
   }
 
-  onVote(socket, data) {
-    const p = this.players.get(socket.id);
-    if (!p) return;
-    this.recordVote(p.sessionId, data && data.mode);
-  }
-
-  recordVote(sessionId, mode) {
-    if (mode !== 'ffa' && mode !== 'zone') return;
-    if (sessionId) this.modeVotes.set(sessionId, mode);
-    this.checkModeSwitch();
-  }
-
-  checkModeSwitch() {
-    const now = Date.now();
-    if (now - this.lastModeSwitch < 30000) return; // 30s 冷却，防止来回横跳
-    let zoneVotes = 0, ffaVotes = 0, total = 0;
-    for (const p of this.players.values()) {
-      if (!p.connected) continue;
-      total++;
-      const v = this.modeVotes.get(p.sessionId);
-      if (v === 'zone') zoneVotes++;
-      else if (v === 'ffa') ffaVotes++;
-      else { if (this.mode === 'zone') zoneVotes++; else ffaVotes++; } // 未投票默认当前模式
+  bindSocket(socket, p) {
+    // 同一 socket 可能跨多局（再来一局）：先摘掉上一局挂的处理器，避免重复监听
+    if (socket._naGame) {
+      socket.removeListener('input', socket._naGame.input);
+      socket.removeListener('ping', socket._naGame.ping);
+      socket.removeListener('disconnect', socket._naGame.disconnect);
     }
-    let target = this.mode;
-    if (total === 1) {
-      // 单人：直接按其选择切换
-      const p = [...this.players.values()].find((x) => x.connected);
-      target = (p && this.modeVotes.get(p.sessionId)) || this.mode;
-    } else if (zoneVotes > ffaVotes) target = 'zone';
-    else if (ffaVotes > zoneVotes) target = 'ffa';
-    if (target !== this.mode) {
-      this.mode = target;
-      this.lastModeSwitch = now;
-      for (const p of this.players.values()) p.score = 0;
-      this.zone.nextMoveAt = now + 3000;
-      this.io.emit('modeChange', { mode: this.mode });
-      console.log(`[⚙] 模式切换: ${this.mode === 'zone' ? '占点模式' : '死亡竞赛'}`);
-    }
+    const h = {
+      input: (d) => this.onInput(p.id, d),
+      ping: (cb) => { if (typeof cb === 'function') cb(Date.now()); },
+      disconnect: () => this.onLeave(p.id),
+    };
+    socket._naGame = h;
+    socket.on('input', h.input);
+    socket.on('ping', h.ping);
+    socket.on('disconnect', h.disconnect);
   }
 
-  onJoin(socket, data) {
-    if (this.players.has(socket.id)) return;
-    const name = sanitizeName(data && data.name);
-    const sessionId = (data && typeof data.sessionId === 'string') ? data.sessionId.slice(0, 64) : '';
-    // 仅在显式传入 mode 时记票（避免无偏好加入的玩家影响模式）
-    const wantMode = (data && (data.mode === 'zone' || data.mode === 'ffa')) ? data.mode : null;
-    // 断线重连恢复：同 sessionId 直接接管原玩家（分数/位置/血量全保留）
-    if (sessionId) {
-      for (const [oldId, p] of this.players) {
-        if (p.sessionId !== sessionId) continue;
-        this.players.delete(oldId);
-        const oldSock = this.io.sockets.sockets.get(oldId);
-        if (oldSock && oldSock.id !== socket.id) oldSock.disconnect(true); // 踢掉旧连接
-        p.id = socket.id;
-        p.connected = true;
-        p.leftAt = 0;
-        p.input = { fwd: 0, strafe: 0, jump: false, fire: false };
-        this.players.set(socket.id, p);
-        socket.emit('welcome', {
-          id: p.id, name: p.name, color: p.color,
-          map: MAP, self: this.pubMe(p), resumed: true, mode: this.mode,
-        });
-        this.sendMe(p);
-        this.recordVote(sessionId, wantMode);
-        console.log(`[↻] ${p.name} 恢复连接 (${this.players.size}/${MAX_PLAYERS})`);
-        return;
-      }
-    }
+  createPlayer(socketId, seed) {
     const idx = this.players.size % COLORS.length;
     const spawn = this.pickSpawn();
-    const p = {
-      id: socket.id,
-      name,
+    return {
+      id: socketId,
+      name: sanitizeName(seed && seed.name),
       color: COLORS[idx],
-      sessionId,
+      sessionId: (seed && typeof seed.sessionId === 'string') ? seed.sessionId : '',
       connected: true,
       leftAt: 0,
       pos: { x: spawn.x, y: 0, z: spawn.z },
@@ -198,20 +192,19 @@ class Game {
       grounded: true,
       input: { fwd: 0, strafe: 0, jump: false, fire: false },
     };
-    this.players.set(socket.id, p);
-    socket.emit('welcome', {
-      id: p.id,
-      name: p.name,
-      color: p.color,
-      map: MAP,
-      self: this.pubMe(p),
-      resumed: false,
-      mode: this.mode,
-    });
-    this.io.emit('playerJoined', { id: p.id, name: p.name });
-    this.sendMe(p);
-    this.recordVote(sessionId, wantMode);
-    console.log(`[+] ${p.name} joined (${this.players.size}/${MAX_PLAYERS})`);
+  }
+
+  onInput(playerId, data) {
+    const p = this.players.get(playerId);
+    if (!this.active || !p || !p.connected || !data) return;
+    if (p.alive) {
+      p.input.fwd = clamp(Number(data.fwd) || 0, -1, 1);
+      p.input.strafe = clamp(Number(data.strafe) || 0, -1, 1);
+      p.input.jump = !!data.jump;
+      p.input.fire = !!data.fire;
+      if (Number.isFinite(data.yaw)) p.yaw = data.yaw;
+      if (Number.isFinite(data.pitch)) p.pitch = clamp(data.pitch, -1.5, 1.5);
+    }
   }
 
   onLeave(id) {
@@ -222,7 +215,7 @@ class Game {
     p.leftAt = Date.now();
     p.input.fire = false;
     this.projectiles = this.projectiles.filter((pr) => pr.owner !== id);
-    console.log(`[-] ${p.name} 断线（保留 ${RECONNECT_GRACE_MS / 1000}s 等待重连）(${this.players.size}/${MAX_PLAYERS})`);
+    console.log(`[neon-arena][${this.roomId}] [-] ${p.name} 断线（保留 ${RECONNECT_GRACE_MS / 1000}s）`);
   }
 
   removePlayer(id) {
@@ -230,21 +223,9 @@ class Game {
     if (!p) return;
     this.players.delete(id);
     this.projectiles = this.projectiles.filter((pr) => pr.owner !== id);
-    this.io.emit('playerLeft', { id });
-    console.log(`[-] ${p.name} 移除 (${this.players.size}/${MAX_PLAYERS})`);
-  }
-
-  onInput(socket, data) {
-    const p = this.players.get(socket.id);
-    if (!p || !data) return;
-    if (p.alive) {
-      p.input.fwd = clamp(Number(data.fwd) || 0, -1, 1);
-      p.input.strafe = clamp(Number(data.strafe) || 0, -1, 1);
-      p.input.jump = !!data.jump;
-      p.input.fire = !!data.fire;
-      if (Number.isFinite(data.yaw)) p.yaw = data.yaw;
-      if (Number.isFinite(data.pitch)) p.pitch = clamp(data.pitch, -1.5, 1.5);
-    }
+    this.emit('playerLeft', { id });
+    console.log(`[neon-arena][${this.roomId}] [-] ${p.name} 移除`);
+    if (this.hooks.onPlayerGone) this.hooks.onPlayerGone(id);
   }
 
   pickSpawn() {
@@ -267,7 +248,10 @@ class Game {
 
   // ---------- tick ----------
   tick() {
+    if (!this.active) return;
     const now = Date.now();
+    // 对局时长到点 → 结束
+    if (now - this.startedAt >= this.durationMs) { this.endGame(); return; }
     const dt = TICK_MS / 1000;
     for (const p of this.players.values()) {
       if (!p.connected) {
@@ -300,7 +284,7 @@ class Game {
       this.zone.z = ZONE_SPOTS[next].z;
       this.zone.y = ZONE_SPOTS[next].y;
       this.zone.nextMoveAt = now + ZONE_MOVE_MS;
-      this.io.emit('zoneMove', { x: this.zone.x, z: this.zone.z, y: this.zone.y });
+      this.emit('zoneMove', { x: this.zone.x, z: this.zone.z, y: this.zone.y });
     }
     // 站桩得分
     for (const p of this.players.values()) {
@@ -317,10 +301,30 @@ class Game {
   }
 
   endRound(winner, now) {
-    this.io.emit('roundEnd', { winnerId: winner.id, winnerName: winner.name });
+    this.emit('roundEnd', { winnerId: winner.id, winnerName: winner.name });
     for (const p of this.players.values()) p.score = 0;
     this.zone.nextMoveAt = now + 3000;
-    console.log(`[🏆] ${winner.name} 赢得占点回合`);
+    console.log(`[neon-arena][${this.roomId}] [🏆] ${winner.name} 赢得占点回合`);
+  }
+
+  // 对局结束：统计 → 广播 → 通知房间管理器回大厅
+  endGame() {
+    if (this._ended || !this.active) return;
+    this._ended = true;
+    this.active = false;
+    clearInterval(this.timer);
+    // 仍断线未归队的玩家：从房间席位移除
+    for (const p of this.players.values()) {
+      if (!p.connected && this.hooks.onPlayerGone) this.hooks.onPlayerGone(p.id);
+    }
+    const stats = [];
+    for (const p of this.players.values()) {
+      stats.push({ id: p.id, name: p.name, kills: p.kills, deaths: p.deaths, score: Math.floor(p.score) });
+    }
+    stats.sort((a, b) => (b.kills + b.score) - (a.kills + a.score));
+    this.emit('game:over', { stats, durationMs: this.durationMs, mode: this.mode });
+    console.log(`[neon-arena][${this.roomId}] 对局结束`);
+    if (this.hooks.onGameOver) this.hooks.onGameOver(stats);
   }
 
   respawn(p) {
@@ -492,7 +496,7 @@ class Game {
         ts: now,
       });
       if (this.killfeed.length > KILLFEED_MAX) this.killfeed.pop();
-      this.io.emit('kill', {
+      this.emit('kill', {
         victimId: victim.id,
         killerId: killer ? killer.id : null,
         killerName: killer ? killer.name : '?',
@@ -552,7 +556,7 @@ class Game {
     }
     const projs = this.projectiles.map((pr) => ({ x: pr.x, y: pr.y, z: pr.z }));
     const pickups = this.pickups.map((pk) => ({ id: pk.id, x: pk.x, z: pk.z, active: pk.active }));
-    this.io.emit('state', {
+    this.emit('state', {
       t: now, mode: this.mode,
       zone: { x: this.zone.x, z: this.zone.z, y: this.zone.y, r: ZONE_R, nextMoveAt: this.zone.nextMoveAt },
       players, projectiles: projs, pickups, killfeed: this.killfeed,

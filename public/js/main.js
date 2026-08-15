@@ -6,8 +6,16 @@ import * as THREE from './three.module.min.js';
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
-  const menu = $('menu'), hud = $('hud'), nameInput = $('nameInput'),
-    startBtn = $('startBtn'), connStatus = $('connStatus'),
+  const hud = $('hud'),
+    lobbyPage = $('lobbyPage'), roomPage = $('roomPage'), gameOverPage = $('gameOverPage'),
+    lobbyName = $('lobbyName'), connStatus = $('connStatus'),
+    roomListEl = $('roomList'),
+    createRoomBtn = $('createRoomBtn'), quickJoinBtn = $('quickJoinBtn'), refreshRoomsBtn = $('refreshRoomsBtn'),
+    roomTitle = $('roomTitle'), roomCode = $('roomCode'), copyCodeBtn = $('copyCodeBtn'),
+    leaveRoomBtn = $('leaveRoomBtn'), roomSettings = $('roomSettings'),
+    modeSelect = $('modeSelect'), maxSelect = $('maxSelect'), minutesSelect = $('minutesSelect'),
+    roomPlayers = $('roomPlayers'), readyBtn = $('readyBtn'), startBtn = $('startBtn'),
+    backToRoomBtn = $('backToRoomBtn'), gameOverStats = $('gameOverStats'),
     deathOverlay = $('deathOverlay'), deathText = $('deathText'), respawnText = $('respawnText'),
     healthBar = $('healthBar'), healthText = $('healthText'),
     killsEl = $('kills'), deathsEl = $('deaths'), pingEl = $('ping'),
@@ -16,7 +24,6 @@ import * as THREE from './three.module.min.js';
     helpText = $('helpText'), appEl = $('app'),
     joyBaseEl = $('joyBase'), joyKnobEl = $('joyKnob'),
     fireBtn = $('fireBtn'), jumpBtn = $('jumpBtn'), touchUI = $('touchUI'),
-    modeFfa = $('modeFfa'), modeZone = $('modeZone'),
     zoneUI = $('zoneUI'), modeLabel = $('modeLabel'),
     zonePts = $('zonePts'), zoneBarFill = $('zoneBarFill'), zoneStatus = $('zoneStatus'),
     banner = $('banner');
@@ -43,13 +50,16 @@ import * as THREE from './three.module.min.js';
   let jumpQueuedAt = 0;            // 跳跃键按下时间戳
   let rotated = false;             // 手机端竖屏时是否已旋转为横屏渲染
   let myName = '玩家';             // 玩家名（断线重连时复用）
-  let joinedOnce = false;          // 是否已加入过（用于断线自动重连）
-  let serverFull = false;          // 服务器已满（停止自动重连）
   // 持久会话 ID：断线重连时服务器据此恢复同一玩家（分数/位置不重置）
   let mySessionId = null;
-  let myMode = 'ffa';              // 玩家选择的模式（空场时生效）
   let gameMode = 'ffa';            // 服务器当前模式
   let zone = null;                 // 占领区状态 {x,z,y,r,nextMoveAt}
+  // ===== 房间大厅状态 =====
+  let uiState = 'lobby';           // lobby | room | game | over
+  let myRoom = null;               // 当前房间数据（room:joined/room:update 推送）
+  let lastRoomCode = null;         // 断线重连时回到的房间
+  let roomList = [];               // 大厅房间列表
+  let myReady = false;             // 我是否已准备
 
   // ===== 游戏状态 =====
   let socket = null;
@@ -135,47 +145,186 @@ import * as THREE from './three.module.min.js';
   function connect() {
     socket = io({ transports: ['websocket', 'polling'] });
     socket.on('connect', () => {
-      connStatus.textContent = '已连接服务器，输入名字点击开始';
-      startBtn.disabled = false;
-      // 断线重连后自动重新加入战场（同 sessionId 恢复原玩家，不新增）
-      if (joinedOnce && !serverFull) {
-        connStatus.textContent = '已重连，正在恢复角色…';
-        socket.emit('join', { name: myName, sessionId: getSessionId() });
+      connStatus.textContent = '已连接服务器';
+      socket.emit('lobby:list');
+      // 断线重连：回到之前的房间（大厅直接回席位；对局中同 sessionId 恢复角色）
+      if (lastRoomCode) {
+        connStatus.textContent = '已重连，正在返回房间 ' + lastRoomCode + ' …';
+        socket.emit('room:join', { code: lastRoomCode, name: myName, sessionId: getSessionId() });
       }
     });
     socket.on('connect_error', () => {
       connStatus.textContent = '连接失败，正在重试…';
     });
-    socket.on('full', () => {
-      serverFull = true;
-      connStatus.textContent = '服务器已满，请稍后再试';
-      startBtn.disabled = true;
+
+    // ---------- 大厅 / 房间 ----------
+    socket.on('lobby:list', (d) => {
+      roomList = (d && d.rooms) || [];
+      renderRoomList();
     });
+    socket.on('room:joined', (d) => {
+      myRoom = d.room;
+      lastRoomCode = d.room.code;
+      myReady = false;
+      // 对局中重连（inGame=true）：保持游戏画面，等待 welcome(resumed)
+      if (d.inGame) { uiState = 'game'; return; }
+      enterRoom();
+    });
+    socket.on('room:update', (d) => {
+      if (!myRoom) return;
+      myRoom = d.room;
+      renderRoom();
+    });
+    socket.on('room:left', () => {
+      backToLobby();
+    });
+    socket.on('room:error', (d) => {
+      const msg = {
+        FULL: '房间已满', NOT_FOUND: '房间不存在', WRONG_PASSWORD: '密码错误',
+        ALREADY_IN_ROOM: '你已在房间中', NOT_IN_ROOM: '你不在任何房间',
+        ROOM_CAP: '服务器房间已满', IN_GAME: '对局进行中，无法加入',
+      }[d && d.code] || '操作失败';
+      showToast(msg);
+      // 自动重连失败（房间没了/进不去）：清掉记忆回到大厅
+      if (d && (d.code === 'NOT_FOUND' || d.code === 'IN_GAME' || d.code === 'FULL') && !myRoom) {
+        lastRoomCode = null;
+        socket.emit('lobby:list');
+      }
+    });
+    socket.on('game:start', (d) => {
+      uiState = 'game';
+      roomPage.classList.add('hidden');
+      gameOverPage.classList.add('hidden');
+    });
+    socket.on('game:over', (d) => {
+      showGameOver((d && d.stats) || []);
+    });
+
+    // ---------- 游戏内 ----------
     socket.on('welcome', onWelcome);
     socket.on('state', onState);
     socket.on('me', onMe);
     socket.on('kill', onKill);
     socket.on('playerLeft', (d) => removeRemotePlayer(d.id));
-    socket.on('modeChange', (d) => {
-      gameMode = d.mode;
-      applyModeUI();
-      showBanner(gameMode === 'zone' ? '🚩 已切换为占点模式' : '🔫 已切换为死亡竞赛', 3000);
-      beep(660, 0.2, 'triangle', 0.08);
-    });
     socket.on('roundEnd', (d) => {
       showBanner((me && d.winnerId === me.id ? '🏆 你获胜了！' : d.winnerName + ' 获胜！') + ' 新一轮开始', 3500);
       beep(880, 0.3, 'triangle', 0.1);
     });
     socket.on('disconnect', () => {
       connStatus.textContent = '与服务器断开连接，正在重连…';
-      startBtn.disabled = true;
       if (started) showHint('连接断开，正在自动重连…', 3000);
       resetTouchInputs();
     });
   }
 
+  // ---------- 大厅 ----------
+  function renderRoomList() {
+    if (!roomListEl) return;
+    if (!roomList.length) {
+      roomListEl.innerHTML = '<div class="empty-tip">暂无房间，点「＋ 创建房间」开一局吧</div>';
+      return;
+    }
+    roomListEl.innerHTML = roomList.map((r) => `
+      <div class="room-row" data-code="${esc(r.code)}">
+        <span class="code">${esc(r.code)}</span>
+        <span class="meta"><b>${esc(r.name)}</b> · ${r.mode === 'zone' ? '🚩占点' : '🔫死斗'}
+          ${r.hasPassword ? '<span class="lock">🔒</span>' : ''} · 房主 ${esc(r.hostName || '?')}</span>
+        <span class="count">${r.players}/${r.maxPlayers}</span>
+      </div>`).join('');
+    roomListEl.querySelectorAll('.room-row').forEach((el) => {
+      el.addEventListener('click', () => {
+        socket.emit('room:join', { code: el.dataset.code, name: myName, sessionId: getSessionId() });
+      });
+    });
+  }
+
+  function enterRoom() {
+    uiState = 'room';
+    lobbyPage.classList.add('hidden');
+    roomPage.classList.remove('hidden');
+    gameOverPage.classList.add('hidden');
+    renderRoom();
+  }
+
+  function renderRoom() {
+    if (!myRoom) return;
+    roomTitle.textContent = myRoom.name;
+    roomCode.textContent = myRoom.code;
+    // 玩家列表
+    roomPlayers.innerHTML = myRoom.players.map((p) => `
+      <li>
+        <span class="dot" style="color:${esc(p.color)};background:${esc(p.color)}"></span>
+        <span class="name">${esc(p.name)}</span>
+        ${p.socketId === socket.id ? '<span class="tag tag-me">我</span>' : ''}
+        ${p.isHost ? '<span class="tag tag-host">房主</span>' : ''}
+        ${p.isHost ? '' : (p.ready ? '<span class="tag tag-ready">已准备</span>' : '<span class="tag tag-notready">未准备</span>')}
+        ${myRoom.hostId === socket.id && p.socketId !== socket.id
+          ? '<button class="btn kick-btn" data-id="' + esc(p.socketId) + '">✕ 踢</button>' : ''}
+      </li>`).join('');
+    roomPlayers.querySelectorAll('.kick-btn').forEach((el) => {
+      el.addEventListener('click', () => socket.emit('room:kick', { targetId: el.dataset.id }));
+    });
+    // 我的准备状态
+    const meP = myRoom.players.find((p) => p.socketId === socket.id);
+    myReady = !!(meP && meP.ready);
+    readyBtn.textContent = myReady ? '✋ 取消准备' : '✔ 准备';
+    // 房主控制区
+    const isHost = myRoom.hostId === socket.id;
+    roomSettings.classList.toggle('hidden', !isHost);
+    startBtn.classList.toggle('hidden', !isHost);
+    if (isHost) {
+      modeSelect.value = myRoom.settings.mode;
+      maxSelect.value = String(myRoom.settings.maxPlayers);
+      minutesSelect.value = String(myRoom.settings.matchMinutes);
+    }
+  }
+
+  function backToLobby() {
+    myRoom = null;
+    lastRoomCode = null;
+    myReady = false;
+    uiState = 'lobby';
+    roomPage.classList.add('hidden');
+    gameOverPage.classList.add('hidden');
+    lobbyPage.classList.remove('hidden');
+    socket.emit('lobby:list');
+  }
+
+  function showGameOver(stats) {
+    uiState = 'over';
+    const myId = me && me.id;
+    resetGame();
+    roomPage.classList.add('hidden');
+    hud.classList.add('hidden');
+    gameOverStats.innerHTML = stats.map((s, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${esc(s.name)}${s.id === myId ? '（我）' : ''}</td>
+        <td>${s.kills}</td><td>${s.deaths}</td><td>${s.score}</td>
+      </tr>`).join('');
+    gameOverPage.classList.remove('hidden');
+  }
+
+  function resetGame() {
+    started = false;
+    me = null;
+    for (const id of [...remotePlayers.keys()]) removeRemotePlayer(id);
+    for (const m of projMeshes) { m.visible = false; }
+    killfeedEl.innerHTML = '';
+    lbList.innerHTML = '';
+    deathOverlay.classList.add('hidden');
+    document.exitPointerLock && document.exitPointerLock();
+  }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2600);
+  }
+
   function onWelcome(data) {
-    joinedOnce = true;
     me = data.self;
     gameMode = data.mode || 'ffa';
     applyModeUI();
@@ -191,7 +340,10 @@ import * as THREE from './three.module.min.js';
     grounded = true;
     physAcc = 0;
     lastHealth = me.health;
-    menu.classList.add('hidden');
+    uiState = 'game';
+    lobbyPage.classList.add('hidden');
+    roomPage.classList.add('hidden');
+    gameOverPage.classList.add('hidden');
     hud.classList.remove('hidden');
     deathOverlay.classList.add('hidden');
     started = true;
@@ -366,8 +518,6 @@ import * as THREE from './three.module.min.js';
   function applyModeUI() {
     modeLabel.textContent = gameMode === 'zone' ? '🚩 占点模式' : '🔫 死亡竞赛';
     zoneUI.classList.toggle('hidden', gameMode !== 'zone');
-    modeFfa.classList.toggle('active', gameMode === 'ffa');
-    modeZone.classList.toggle('active', gameMode === 'zone');
   }
   function updateZoneMesh() {
     if (!zoneMesh) return;
@@ -978,22 +1128,58 @@ import * as THREE from './three.module.min.js';
   window.addEventListener('blur', () => { if (started) resetTouchInputs(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && started) resetTouchInputs(); });
 
-  // 模式选择（空场时生效）
-  modeFfa.addEventListener('click', () => {
-    myMode = 'ffa';
-    modeFfa.classList.add('active'); modeZone.classList.remove('active');
+  // ---------- 大厅 / 房间按钮 ----------
+  lobbyName.addEventListener('input', () => {
+    myName = (lobbyName.value || '玩家').trim().slice(0, 16);
   });
-  modeZone.addEventListener('click', () => {
-    myMode = 'zone';
-    modeZone.classList.add('active'); modeFfa.classList.remove('active');
+  createRoomBtn.addEventListener('click', () => {
+    myName = (lobbyName.value || '玩家').trim().slice(0, 16);
+    socket.emit('room:create', { name: myName + ' 的房间', playerName: myName, sessionId: getSessionId() });
   });
-
+  quickJoinBtn.addEventListener('click', () => {
+    const open = roomList.find((r) => r.state === 'lobby' && r.players < r.maxPlayers && !r.hasPassword);
+    if (open) {
+      socket.emit('room:join', { code: open.code, name: myName, sessionId: getSessionId() });
+    } else {
+      showToast('暂无可加入的房间，试试创建一个');
+    }
+  });
+  refreshRoomsBtn.addEventListener('click', () => {
+    socket.emit('lobby:list');
+    showToast('已刷新房间列表');
+  });
+  copyCodeBtn.addEventListener('click', () => {
+    if (myRoom) {
+      const ok = navigator.clipboard && navigator.clipboard.writeText(myRoom.code);
+      if (ok) ok.then(() => showToast('房间码已复制：' + myRoom.code)).catch(() => showToast('房间码：' + myRoom.code));
+      else showToast('房间码：' + myRoom.code);
+    }
+  });
+  leaveRoomBtn.addEventListener('click', () => {
+    socket.emit('room:leave');
+  });
+  readyBtn.addEventListener('click', () => {
+    myReady = !myReady;
+    socket.emit('room:ready', { ready: myReady });
+  });
   startBtn.addEventListener('click', () => {
-    myName = (nameInput.value || '玩家').trim().slice(0, 16);
-    socket.emit('join', { name: myName, sessionId: getSessionId(), mode: myMode });
+    socket.emit('room:start');
   });
-  nameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') startBtn.click();
+  backToRoomBtn.addEventListener('click', () => {
+    gameOverPage.classList.add('hidden');
+    if (myRoom) enterRoom();
+    else backToLobby();
+  });
+  // 房主改设置
+  [modeSelect, maxSelect, minutesSelect].forEach((sel) => {
+    sel.addEventListener('change', () => {
+      if (!myRoom || myRoom.hostId !== socket.id) return;
+      socket.emit('room:settings', {
+        mode: modeSelect.value,
+        maxPlayers: parseInt(maxSelect.value, 10),
+        matchMinutes: parseInt(minutesSelect.value, 10),
+      });
+    });
   });
 
   // 输入上报（死亡期间也持续上报，服务器自动忽略；复活瞬间输入立即生效）
@@ -1031,9 +1217,11 @@ import * as THREE from './three.module.min.js';
           '💡 四角发光传送台可弹射上天，中央高台是制高点；已自动横屏';
       }
     }
+    myName = (lobbyName.value || '玩家').trim().slice(0, 16);
     const host = location.hostname || 'localhost';
     const port = location.port ? ':' + location.port : '';
     connStatus.textContent = '正在连接 ' + host + port + ' …';
+    lobbyPage.classList.remove('hidden');
     connect();
   }
   init();

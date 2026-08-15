@@ -5,6 +5,61 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
 <link rel="stylesheet" href="css/style.css"/>
+<style>
+  /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
+  .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 30%,#1b1f3a 0%,#0b0d1d 70%);}
+  .hidden{display:none !important;}
+  .panel{width:min(680px,92vw);max-height:88vh;overflow:auto;background:rgba(20,24,48,.92);
+    border:1px solid #3b4fd8;border-radius:16px;box-shadow:0 0 30px rgba(90,120,255,.25),inset 0 0 40px rgba(60,80,255,.06);
+    padding:24px 26px;color:#dfe6ff;}
+  .panel h1{margin:0 0 4px;font-size:30px;letter-spacing:2px;color:#fff;text-shadow:0 0 14px rgba(120,160,255,.8);}
+  .panel h1 span{display:block;font-size:12px;letter-spacing:6px;color:#7dd3fc;opacity:.85;font-weight:400;}
+  .panel .sub{color:#8fa3d8;margin:2px 0 16px;font-size:13px;}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
+  .panel input[type=text],.panel input:not([type]){flex:1;min-width:120px;padding:9px 12px;border-radius:8px;border:1px solid #33408f;
+    background:#0d1028;color:#fff;outline:none;font-size:14px;}
+  .panel input:focus{border-color:#4f6bff;}
+  .btn{padding:9px 14px;border-radius:8px;border:1px solid #33408f;background:#12173a;color:#cfe0ff;cursor:pointer;font-size:13px;transition:.15s;}
+  .btn:hover{border-color:#4f6bff;color:#fff;}
+  .btn-primary{border-color:#4f6bff;background:linear-gradient(180deg,#2b3fd8,#1d2ba8);color:#fff;}
+  .btn-primary:hover{filter:brightness(1.15);}
+  .btn-danger{border-color:#a33b5c;color:#ff9db8;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  .room-list{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}
+  .room-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #28305f;border-radius:10px;background:#101432;cursor:pointer;transition:.15s;}
+  .room-row:hover{border-color:#4f6bff;background:#141a42;}
+  .room-row .code{font-weight:700;color:#7dd3fc;letter-spacing:1px;min-width:74px;}
+  .room-row .meta{flex:1;font-size:13px;color:#b7c6f2;}
+  .room-row .meta b{color:#fff;}
+  .room-row .count{color:#7dd3fc;font-size:13px;}
+  .room-row .lock{color:#f59e0b;}
+  .room-row .in-game{color:#f87171;font-size:12px;}
+  .empty-tip{color:#5d6ba8;text-align:center;padding:18px 0;font-size:13px;}
+  .room-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid #28305f;padding-bottom:12px;margin-bottom:14px;}
+  .room-head h2{margin:0;flex:1;font-size:20px;color:#fff;}
+  .room-code{font-size:20px;color:#7dd3fc;letter-spacing:3px;font-weight:700;}
+  .room-settings{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px;font-size:13px;color:#b7c6f2;}
+  .room-settings select{padding:6px 8px;border-radius:8px;border:1px solid #33408f;background:#0d1028;color:#fff;outline:none;}
+  .room-players{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:6px;}
+  .room-players li{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid #242c55;border-radius:8px;background:#0e1230;font-size:14px;}
+  .dot{width:12px;height:12px;border-radius:50%;display:inline-block;box-shadow:0 0 8px currentColor;}
+  .room-players .name{flex:1;color:#fff;}
+  .tag{font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid;white-space:nowrap;}
+  .tag-host{color:#fbbf24;border-color:#b98a1f;}
+  .tag-ready{color:#34d399;border-color:#1f9d6f;}
+  .tag-notready{color:#8a94c8;border-color:#3a4377;}
+  .tag-me{color:#7dd3fc;border-color:#2f7ba8;}
+  .room-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;}
+  table.stats{width:100%;border-collapse:collapse;margin:14px 0;}
+  table.stats th,table.stats td{padding:8px 10px;border-bottom:1px solid #242c55;text-align:center;font-size:14px;}
+  table.stats th{color:#8fa3d8;font-weight:400;font-size:12px;}
+  table.stats td{color:#fff;}
+  .toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:100;background:#2a1030;border:1px solid #b84a6f;
+    color:#ffd7e4;padding:10px 18px;border-radius:10px;font-size:13px;box-shadow:0 4px 18px rgba(0,0,0,.5);}
+  #connStatus{margin-top:10px;color:#8fa3d8;font-size:12px;text-align:center;}
+  @media (max-width:480px){ .panel{padding:16px;} .panel h1{font-size:24px;} }
+</style>
 </head>
 <body>
 <div id="app">
@@ -43,16 +98,18 @@
   </div>
 </div>
 
-<div id="menu">
-  <div class="menu-box">
+<!-- 大厅页 -->
+<div id="lobbyPage" class="page">
+  <div class="panel">
     <h1>霓虹竞技场<span>NEON ARENA</span></h1>
-    <p class="sub">3D 联机射击 · 服务器混战</p>
-    <input id="nameInput" maxlength="16" placeholder="输入你的名字" value="玩家"/>
-    <div id="modeSel">
-      <button id="modeFfa" class="mode-btn active">🔫 死亡竞赛</button>
-      <button id="modeZone" class="mode-btn">🚩 占点模式</button>
+    <p class="sub">3D 联机射击 · 房间大厅</p>
+    <div class="row">
+      <input id="lobbyName" maxlength="16" placeholder="输入你的名字" value="玩家"/>
+      <button id="createRoomBtn" class="btn btn-primary">＋ 创建房间</button>
+      <button id="quickJoinBtn" class="btn">⚡ 快速加入</button>
+      <button id="refreshRoomsBtn" class="btn">🔄 刷新</button>
     </div>
-    <button id="startBtn">开始游戏</button>
+    <div id="roomList" class="room-list"></div>
     <div class="help" id="helpText">
       <b>操作</b>：WASD 移动 · 点击画面锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃<br/>
       若锁定不可用：按住<b>鼠标右键拖拽</b>旋转视角。💡 四角发光传送台可弹射上天，中央高台是制高点
@@ -60,6 +117,60 @@
     <div id="connStatus">正在连接服务器…</div>
   </div>
 </div>
+
+<!-- 房间页 -->
+<div id="roomPage" class="page hidden">
+  <div class="panel">
+    <div class="room-head">
+      <h2 id="roomTitle">霓虹混战</h2>
+      <div>房间码 <b class="room-code" id="roomCode">------</b></div>
+      <button id="copyCodeBtn" class="btn">复制</button>
+      <button id="leaveRoomBtn" class="btn btn-danger">离开房间</button>
+    </div>
+    <div id="roomSettings" class="room-settings hidden">
+      <label>模式
+        <select id="modeSelect">
+          <option value="ffa">🔫 死亡竞赛</option>
+          <option value="zone">🚩 占点模式</option>
+        </select>
+      </label>
+      <label>人数
+        <select id="maxSelect">
+          <option value="4">4 人</option>
+          <option value="8">8 人</option>
+          <option value="16" selected>16 人</option>
+        </select>
+      </label>
+      <label>时长
+        <select id="minutesSelect">
+          <option value="3">3 分钟</option>
+          <option value="5" selected>5 分钟</option>
+          <option value="10">10 分钟</option>
+        </select>
+      </label>
+    </div>
+    <ul id="roomPlayers" class="room-players"></ul>
+    <div class="room-actions">
+      <button id="readyBtn" class="btn">✔ 准备</button>
+      <button id="startBtn" class="btn btn-primary hidden">▶ 开始游戏</button>
+    </div>
+  </div>
+</div>
+
+<!-- 对局结算页 -->
+<div id="gameOverPage" class="page hidden">
+  <div class="panel">
+    <h1>对局结束<span>MATCH OVER</span></h1>
+    <table class="stats">
+      <thead><tr><th>#</th><th>玩家</th><th>击杀</th><th>死亡</th><th>得分</th></tr></thead>
+      <tbody id="gameOverStats"></tbody>
+    </table>
+    <div class="room-actions">
+      <button id="backToRoomBtn" class="btn btn-primary">返回房间</button>
+    </div>
+  </div>
+</div>
+
 </div>
 
 <script src="js/socket.io.min.js"></script>

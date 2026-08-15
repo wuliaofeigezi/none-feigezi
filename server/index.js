@@ -3,7 +3,7 @@ const path = require('path');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { Game } = require('./game');
+const { RoomManager } = require('./rooms');
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -19,8 +19,9 @@ const io = new Server(server, {
   pingTimeout: 10000,
 });
 
-const game = new Game(io);
-game.start();
+// 房间大厅：连接全部交给 RoomManager 按房间分发
+const manager = new RoomManager(io);
+io.on('connection', (socket) => manager.handleConnection(socket));
 
 server.listen(PORT, HOST, () => {
   console.log(`[neon-arena] listening on http://${HOST}:${PORT}`);
