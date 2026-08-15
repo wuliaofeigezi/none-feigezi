@@ -54,7 +54,7 @@ const CTF_ROUND_OVER_MS = 3500;  // 回合结束停留时间
 const CTF_VOTE_CHANGE_MS = 3000; // 投票改选冷却（每 3 秒可改一次票）
 
 // 旗手惩罚（携带敌方旗帜时）
-const CTF_CARRIER_SPEED_MUL = 0.75;   // 移速 -25%
+const CTF_CARRIER_SPEED_MUL = 0.5;    // 移速 -50%
 const CTF_CARRIER_JUMP_MUL = 0.65;    // 跳跃 -35%
 const CTF_CARRIER_DMG_MUL = 1.5;      // 受击伤害 +50%
 const CTF_CARRIER_NO_HEAL = true;     // 不能捡血包（旗手不可回血）

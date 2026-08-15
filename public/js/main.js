@@ -464,7 +464,7 @@ import * as THREE from './three.module.min.js';
     const myTeam = me ? me.team : null;
     const myCarry = !!(me && ctfState.flags && ctfState.flags.some((f) => f.carrier === me.id));
     if (myCarry) {
-      ctfFlagStatus.textContent = '🚩 你正扛着敌方旗帜！减速 25% · 受击+50% · 不能回血';
+      ctfFlagStatus.textContent = '🚩 你正扛着敌方旗帜！减速 50% · 受击+50% · 不能回血';
       ctfFlagStatus.classList.add('carrying');
     } else {
       ctfFlagStatus.classList.remove('carrying');
@@ -1097,15 +1097,39 @@ import * as THREE from './three.module.min.js';
   function inputStrafe() { return clamp((keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0) + joy.strafe, -1, 1); }
   function inputJump() { return !!keys['Space'] || (jumpQueuedAt && performance.now() - jumpQueuedAt < 200); }
 
+  // 本地预测倍率（与服务端 cfg/旗手惩罚保持一致，避免预测漂移导致视角闪回）
+  function localMoveMul() {
+    let m = 1;
+    if (me && me.carrying) m *= 0.5;                    // 旗手移速减半
+    const card = ctfState && ctfState.applied;
+    if (card && card.id === 'speed') m *= 1.5;          // 疾风
+    else if (card && card.id === 'slow') m *= 0.75;     // 泥沼
+    return m;
+  }
+  function localJumpMul() {
+    let m = 1;
+    if (me && me.carrying) m *= 0.65;                   // 旗手降跳
+    const card = ctfState && ctfState.applied;
+    if (card && card.id === 'jump') m *= 1.6;           // 弹跳
+    return m;
+  }
+  function localGravityMul() {
+    let m = 1;
+    const card = ctfState && ctfState.applied;
+    if (card && card.id === 'moon') m *= 0.5;           // 月球
+    else if (card && card.id === 'heavy') m *= 1.6;     // 重力场
+    return m;
+  }
+
   function localPhysics(dt) {
-    myVel.y -= GRAVITY * dt;
+    myVel.y -= GRAVITY * localGravityMul() * dt;
     if (myVel.y < -40) myVel.y = -40;
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
     const fx = -sin, fz = -cos, rx = cos, rz = -sin;
     const fwd = inputFwd();
     const strafe = inputStrafe();
-    myVel.x = (fx * fwd + rx * strafe) * MOVE_SPEED;
-    myVel.z = (fz * fwd + rz * strafe) * MOVE_SPEED;
+    myVel.x = (fx * fwd + rx * strafe) * MOVE_SPEED * localMoveMul();
+    myVel.z = (fz * fwd + rz * strafe) * MOVE_SPEED * localMoveMul();
 
     const wasGrounded = grounded;
     grounded = false;
@@ -1123,7 +1147,7 @@ import * as THREE from './three.module.min.js';
       }
     }
     if (inputJump() && (grounded || wasGrounded)) {
-      myVel.y = JUMP_VEL;
+      myVel.y = JUMP_VEL * localJumpMul();
       grounded = false;
     }
   }
