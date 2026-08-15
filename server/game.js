@@ -51,6 +51,7 @@ const CTF_FLAG_RETURN_MS = 10000;// 旗落地后回基地时间
 const CTF_ROUND_WINS = 2;        // 先赢 2 回合的队伍获胜
 const CTF_MAX_ROUNDS = 5;        // 最多 5 回合（防僵局）
 const CTF_ROUND_OVER_MS = 3500;  // 回合结束停留时间
+const CTF_VOTE_CHANGE_MS = 3000; // 投票改选冷却（每 3 秒可改一次票）
 
 // 旗手惩罚（携带敌方旗帜时）
 const CTF_CARRIER_SPEED_MUL = 0.75;   // 移速 -25%
@@ -346,8 +347,12 @@ class Game {
     if (this.ctf.phase !== 'vote') return;
     const card = data && data.card;
     if (!Number.isInteger(card) || card < 0 || card >= this.ctf.cards.length) return;
-    if (this.ctf.votes.has(p.sessionId)) return; // 每人一票
+    const now = Date.now();
+    const lastAt = this.ctf.voteAt.get(p.sessionId) || 0;
+    // 已投过且未过冷却：不可改选
+    if (this.ctf.votes.has(p.sessionId) && now - lastAt < CTF_VOTE_CHANGE_MS) return;
     this.ctf.votes.set(p.sessionId, card);
+    this.ctf.voteAt.set(p.sessionId, now);
     // 广播每张卡当前票数（供客户端实时反馈）
     const tally = [0, 0, 0];
     for (const idx of this.ctf.votes.values()) tally[idx]++;
@@ -367,6 +372,7 @@ class Game {
     c.cards = pool.slice(0, 3).map((x) => ({ id: x.id, name: x.name, desc: x.desc }));
     c.applied = null;
     c.votes = new Map();
+    c.voteAt = new Map();
     c.scores = [0, 0];
     c.phase = 'vote';
     c.voteEndsAt = Date.now() + CTF_VOTE_MS;

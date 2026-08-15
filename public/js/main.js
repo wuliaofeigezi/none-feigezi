@@ -64,8 +64,10 @@ import * as THREE from './three.module.min.js';
   let roomList = [];               // 大厅房间列表
   let myReady = false;             // 我是否已准备
   // ===== CTF 夺旗卡牌赛 =====
+  const VOTE_CHANGE_MS = 3000;     // 投票改选冷却（与服务端一致）
   let ctfState = null;             // 最新 state 里的 ctf 数据
   let myVote = -1;                 // 我投的卡下标
+  let myVoteAt = 0;                // 我上次改选时间戳（冷却用）
   let voteEndsAt = 0;              // 投票截止时间戳
   let flagBeacons = [];            // 旗帜 3D 标记
   let voteTimer = null;            // 投票倒计时定时器
@@ -395,6 +397,7 @@ import * as THREE from './three.module.min.js';
   function showCtfVote(d) {
     if (!d || !d.cards || !voteCards) return;
     myVote = -1;
+    myVoteAt = 0;
     voteEndsAt = d.voteEndsAt || 0;
     // 释放鼠标指针锁定，让玩家能自由点击卡片投票
     document.exitPointerLock && document.exitPointerLock();
@@ -406,19 +409,30 @@ import * as THREE from './three.module.min.js';
       </button>`).join('');
     voteCards.querySelectorAll('.vp-card').forEach((el) => {
       el.addEventListener('click', () => {
-        if (myVote !== -1) return;
+        const now = Date.now();
+        // 已投票且冷却未过：提示剩余时间
+        if (myVote !== -1 && now - myVoteAt < VOTE_CHANGE_MS) {
+          const left = Math.ceil((VOTE_CHANGE_MS - (now - myVoteAt)) / 1000);
+          if (voteStatus) voteStatus.textContent = '⏳ 改选冷却中，' + left + ' 秒后可换卡';
+          el.classList.add('vp-shake');
+          setTimeout(() => el.classList.remove('vp-shake'), 400);
+          return;
+        }
         myVote = parseInt(el.dataset.i, 10);
+        myVoteAt = now;
         socket.emit('vote', { card: myVote });
         voteCards.querySelectorAll('.vp-card').forEach((b) => {
           b.classList.toggle('vp-picked', b === el);
           if (b !== el) b.classList.add('vp-dim');
+          else b.classList.remove('vp-dim');
         });
         el.classList.add('vp-pop'); // 点击弹跳反馈
         setTimeout(() => el.classList.remove('vp-pop'), 320);
-        if (voteStatus) voteStatus.textContent = '已投票，等待开牌…';
+        const cardName = el.querySelector('.vp-name');
+        if (voteStatus) voteStatus.textContent = '已投「' + (cardName ? cardName.textContent : myVote) + '」，' + (VOTE_CHANGE_MS / 1000) + ' 秒后可改选';
       });
     });
-    if (voteStatus) voteStatus.textContent = '点击一张卡片投票';
+    if (voteStatus) voteStatus.textContent = '点击一张卡片投票（每 3 秒可改选）';
     votePanel.classList.remove('hidden');
     clearInterval(voteTimer);
     voteTimer = setInterval(updateVoteCountdown, 200);

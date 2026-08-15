@@ -91,6 +91,8 @@
   .vp-card.vp-dim{opacity:.4;}
   .vp-card.vp-pop{animation:vpPop .32s ease;}
   @keyframes vpPop{0%{transform:scale(1);}40%{transform:scale(1.14);}100%{transform:scale(1);}}
+  .vp-card.vp-shake{animation:vpShake .4s ease;}
+  @keyframes vpShake{0%,100%{transform:translateX(0);}25%{transform:translateX(-6px);}75%{transform:translateX(6px);}}
   .vp-status{margin-top:12px;text-align:center;font-size:13px;color:#9fb3e8;}
   .ctf-match-result{color:#ffe9a8;font-size:15px;text-align:center;margin:10px 0 4px;font-weight:700;}
   .ctf-team-tag{font-size:12px;margin-left:6px;}
