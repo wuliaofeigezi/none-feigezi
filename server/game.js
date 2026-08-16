@@ -199,6 +199,15 @@ class Game {
     });
     this.sendMe(p);
     this.emit('playerJoined', { id: p.id, name: p.name, team: p.team });
+    // 中途加入（对局已开始）：立即出生，不等 8s 自动选机甲（回合进行中直接参战）
+    if (this.mode === 'duel' && this.duel && this.duel.phase === 'play') {
+      p.mechIndex = 0;
+      this.respawn(p);
+      this.sendMe(p);
+    } else if (this.mode !== 'duel' && this.startedAt > 0) {
+      this.respawn(p);
+      this.sendMe(p);
+    }
     console.log(`[neon-arena][${this.roomId}] [+] ${p.name} joined (${this.players.size}/${this.maxPlayers})`);
     return p;
   }
@@ -974,6 +983,14 @@ class Game {
         }
         return; // roundOver 期间不跑常规物理/广播（也可保留，简化：暂停）
       }
+    }
+
+    if (this.mode === 'duel' && this.duel && this.duel.phase === 'roundOver') {
+      // 死斗回合结束停留期：暂停物理/武器，避免回合结束后还能移动开火
+      const d = this.duel;
+      if (now >= d.roundOverAt) this.startNextDuelRound(now);
+      this.broadcast(now);
+      return;
     }
 
     const dt = TICK_MS / 1000;

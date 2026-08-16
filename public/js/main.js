@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260907 · 死斗回合结束存活者满血回出生点；小地图移右下避免与排行榜重叠；敌方名字仅锁定可见(含距离) · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260908 · 死斗完善：回合结束暂停(禁止继续移动开火)+回合倒计时HUD+观战空格切换+中途加入立即出生 · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -1528,6 +1528,7 @@ import * as THREE from './three.module.min.js';
 
   // ---------- 观战模式（死斗出局） ----------
   let spectateId = null;
+  let spectateSwitchQueued = false;
   function spectateCamera(dt) {
     if (!spectateId || !remotePlayers.has(spectateId) || remotePlayers.get(spectateId).alive === false) {
       spectateId = null;
@@ -1538,6 +1539,15 @@ import * as THREE from './three.module.min.js';
         if (d < bd) { bd = d; best = id; }
       }
       spectateId = best;
+    }
+    // 空格切换观战目标
+    if (spectateSwitchQueued) {
+      spectateSwitchQueued = false;
+      const ids = [...remotePlayers.keys()].filter((id) => remotePlayers.get(id).alive !== false && remotePlayers.get(id).visible);
+      if (ids.length > 1) {
+        const idx = Math.max(0, ids.indexOf(spectateId));
+        spectateId = ids[(idx + 1) % ids.length];
+      }
     }
     const rp = spectateId && remotePlayers.get(spectateId);
     if (!rp) return;
@@ -1949,7 +1959,12 @@ import * as THREE from './three.module.min.js';
   function updateDuelHud(state) {
     if (!duelHud || !state) return;
     duelHud.classList.remove('hidden');
-    duelLives.textContent = me ? ('剩余机甲 ' + (me.lives || 0) + ' 台') : '';
+    // 显示本回合剩余时间（CS 式倒计时）
+    const leftMs = Math.max(0, (state.roundEndsAt || 0) - Date.now());
+    const secs = Math.ceil(leftMs / 1000);
+    duelLives.textContent = state.phase === 'roundOver'
+      ? ('回合结束 · 下一回合准备中')
+      : ('⏱ ' + secs + ' 秒');
     const b0 = state.bases && state.bases[0], b1 = state.bases && state.bases[1];
     if (b0) {
       duelCore0.style.width = b0.coreAlive ? (b0.deploy / state.deployNeed) * 100 + '%' : '100%';
@@ -2446,8 +2461,9 @@ import * as THREE from './three.module.min.js';
       fire = false; // 死亡时复位开火
       touchFire = false;
       if (gameMode === 'duel' && m.lives === 0) {
-        deathText.textContent = '💥 机甲全部损毁，进入观战';
-        respawnText.textContent = '鼠标移动环视战场';
+        // 死斗出局：进入观战（隐藏死亡遮罩，让观战画面可见；顶部提示条显示）
+        deathOverlay.classList.add('hidden');
+        showBanner('💥 本回合出局，观战中 · 空格切换视角 · 下一回合复活', 4000);
       } else if (!m.respawnIn) {
         // 开局选择机甲阶段
         deathText.textContent = '选择出战机甲';
@@ -2457,7 +2473,7 @@ import * as THREE from './three.module.min.js';
         respawnIn = m.respawnIn || 3000;
         respawnAtLocal = performance.now() + respawnIn;
       }
-      deathOverlay.classList.remove('hidden');
+      if (!(gameMode === 'duel' && m.lives === 0)) deathOverlay.classList.remove('hidden');
       updateMechSelect(m); // 死亡/开局可选择机甲
     }
     if (!wasAlive && m.alive) {
@@ -3351,6 +3367,10 @@ import * as THREE from './three.module.min.js';
   document.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     if (e.code === 'Space') e.preventDefault();
+    // 死斗观战：空格切换观战目标
+    if (e.code === 'Space' && started && me && !me.alive && gameMode === 'duel' && me.lives === 0 && !e.repeat) {
+      spectateSwitchQueued = true;
+    }
     if (e.code === 'Tab' && started) {
       e.preventDefault();
       if (!kdaOverlay.classList.contains('hidden')) return;

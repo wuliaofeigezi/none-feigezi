@@ -457,6 +457,50 @@ assert(duelGame.duel.roundWins[pE.team] === 13 && duelGame.duel.winnerTeam === p
 const overEvt = emitted.find(([ev, d]) => ev === 'game:over' && d && d.mode === 'duel');
 assert(overEvt && overEvt[1].duel && overEvt[1].duel.roundWins && overEvt[1].duel.roundWins[pE.team] === 13, 'game:over 应携带大局比分');
 
+// ---- 15b. 回合结束暂停期：roundOver 期间不跑物理/武器（防止结束后还能移动开火） ----
+const PA = fakeSocket('PA');
+const PB = fakeSocket('PB');
+const pauseGame = new Game(io, 'room_pause', { mode: 'duel', maxPlayers: 8, matchMinutes: 5 }, {});
+pauseGame.start([
+  { socketId: 'PA', name: 'PA', sessionId: 's_pa', mechs: [{ type: 'humanoid', weapons: ['gau12'] }] },
+  { socketId: 'PB', name: 'PB', sessionId: 's_pb', mechs: [{ type: 'humanoid', weapons: ['gau12'] }] },
+]);
+clearInterval(pauseGame.timer);
+pauseGame.timer = null;
+pauseGame.onMechSelect('PA', { index: 0 });
+pauseGame.onMechSelect('PB', { index: 0 });
+const pPA = pauseGame.players.get('PA');
+const pPB = pauseGame.players.get('PB');
+// PA 击杀 PB → 回合结束进入 roundOver
+pauseGame.damageModule(pPB, MODULE_CORE, 9999, 'PA', Date.now());
+pauseGame.tick();
+assert(pauseGame.duel.phase === 'roundOver', '应进入 roundOver');
+// roundOver 期间：PA 开火也不应产生子弹（物理/武器暂停）
+pPA.input.fire = true;
+pPA.aim = { x: 0, y: 1, z: 20 };
+const shotsBefore = pauseGame.projectiles.length;
+pauseGame.tick();
+pauseGame.tick();
+assert(pauseGame.projectiles.length === shotsBefore, 'roundOver 期间不应产生新弹道');
+pPA.input.fire = false;
+
+// ---- 15c. 中途加入死斗：回合进行中立即出生 ----
+const PM = fakeSocket('PM');
+const M1 = fakeSocket('M1');
+const M2 = fakeSocket('M2');
+const midGame = new Game(io, 'room_mid', { mode: 'duel', maxPlayers: 8, matchMinutes: 5 }, {});
+midGame.start([
+  { socketId: 'M1', name: 'M1', sessionId: 's_m1', mechs: [{ type: 'humanoid', weapons: [] }] },
+  { socketId: 'M2', name: 'M2', sessionId: 's_m2', mechs: [{ type: 'humanoid', weapons: [] }] },
+]);
+clearInterval(midGame.timer);
+midGame.timer = null;
+midGame.onMechSelect('M1', { index: 0 });
+midGame.onMechSelect('M2', { index: 0 });
+midGame.attachPlayer('PM', { name: 'Late', sessionId: 's_pm', mechs: [{ type: 'spider', weapons: [] }] });
+const pPM = midGame.players.get('PM');
+assert(pPM.alive && pPM.mechType === 'spider', '中途加入死斗应立即出生');
+
 // ---- 16. 断线重连恢复（Game 层）：同 sessionId 恢复原玩家，并返回旧 socketId ----
 game.onLeave('A');
 assert(!game.players.get('A').connected, '断线后 connected 应为 false');
