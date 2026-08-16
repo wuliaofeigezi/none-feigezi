@@ -155,20 +155,19 @@ game.tick();
 console.log('人形 2 腿损毁 vel.z:', pA.vel.z.toFixed(2), '(期望 -1.90)');
 assert(Math.abs(Math.abs(pA.vel.z) - fullSpd * 0.2) < 0.01, '人形 2 腿损毁应减速 80%');
 
-// ---- 12. 镭射激光：接触施加灼烧（每秒 5 伤害持续 10 秒），停止照射后继续掉血 ----
+// ---- 12. 灼光镭射：照射期间持续伤害，停止照射即停止（无残留灼烧） ----
 setWeapon(pA, 'laser');
 place(pA, 0, 12);
 place(pB, 0, 16);
 input(A, { fire: true, yaw: Math.PI, pitch: 0 });
 const chestL0 = pB.mech.chest;
-for (let i = 0; i < 5; i++) game.tick();
+for (let i = 0; i < 10; i++) game.tick(); // 0.5s 照射
+assert(pB.mech.chest < chestL0, '激光照射应持续造成伤害');
 input(A, { fire: false });
-assert(pB.burns.size > 0, '激光接触应施加灼烧状态');
-assert(pB.mech.chest < chestL0, '激光灼烧应造成伤害');
 const chestL1 = pB.mech.chest;
-for (let i = 0; i < 40; i++) game.tick(); // 2 秒
-assert(pB.mech.chest < chestL1, '停止照射后灼烧应继续掉血');
-assert(pB.mech.chest > 0, '灼烧不应瞬间击杀（250 胸足够）');
+for (let i = 0; i < 40; i++) game.tick(); // 停止照射 2 秒
+assert(pB.mech.chest === chestL1, '停止照射后不应再掉血（无残留灼烧）');
+assert(pB.mech.chest > 0, '不应瞬间击杀（250 胸足够）');
 
 // ---- 13. 巡飞弹：5 发齐射，弧线越地形，落地爆炸伤害（随机命中模块） ----
 setWeapon(pA, 'loiter');
@@ -194,7 +193,7 @@ pB.legsDestroyed = 0;
 input(B, { fwd: 1, yaw: Math.PI });
 game.tick();
 const spd0 = Math.abs(pB.vel.z);
-assert(Math.abs(spd0 - 4.75) < 0.01, '蜘蛛满血移速应为 4.75（移速减缓50%）');
+assert(Math.abs(spd0 - 9.5) < 0.01, '蜘蛛满血移速应为 9.5（移速翻倍）');
 const spiderMuls = [0.95, 0.75, 0.5, 0.2, 0.05, 0];
 for (let i = 0; i < 6; i++) {
   pB.mech.legs[i] = 0;

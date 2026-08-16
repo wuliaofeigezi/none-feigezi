@@ -8,7 +8,7 @@ import * as THREE from './three.module.min.js';
   // 音频（WebAudio 程序化合成：背景音乐 + 武器/命中音效，无需外部文件）
   // =========================================================
   const AUDIO = {
-    ctx: null, musicOn: true, sfxOn: true,
+    ctx: null, musicOn: true, sfxOn: true, musicBus: null,
     musicTimer: null, nextT: 0, step: 0,
     laserSnd: null, // 激光持续音节点
     lastOwnLoiter: 0,
@@ -27,13 +27,17 @@ import * as THREE from './three.module.min.js';
       try {
         const AC = window.AudioContext || window.webkitAudioContext;
         AUDIO.ctx = new AC();
+        // 音乐总线：关闭音乐时一键静音所有已调度音符
+        AUDIO.musicBus = AUDIO.ctx.createGain();
+        AUDIO.musicBus.gain.value = 1;
+        AUDIO.musicBus.connect(AUDIO.ctx.destination);
       } catch (e) { return null; }
     }
     if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume().catch(() => {});
     return AUDIO.ctx;
   }
 
-  function tone(freq, dur, type, vol, freqEnd, lp) {
+  function tone(freq, dur, type, vol, freqEnd, lp, bus) {
     const ctx = AUDIO.ctx;
     if (!ctx) return;
     const t0 = ctx.currentTime;
@@ -44,15 +48,16 @@ import * as THREE from './three.module.min.js';
     if (freqEnd) o.frequency.exponentialRampToValueAtTime(freqEnd, t0 + dur);
     g.gain.setValueAtTime(vol || 0.05, t0);
     g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+    const dest = bus || ctx.destination;
     if (lp) {
       const f = ctx.createBiquadFilter();
       f.type = 'lowpass'; f.frequency.value = lp;
-      o.connect(g); g.connect(f); f.connect(ctx.destination);
-    } else { o.connect(g); g.connect(ctx.destination); }
+      o.connect(g); g.connect(f); f.connect(dest);
+    } else { o.connect(g); g.connect(dest); }
     o.start(t0); o.stop(t0 + dur + 0.03);
   }
 
-  function noiseAt(t, dur, vol, fType, fFreq) {
+  function noiseAt(t, dur, vol, fType, fFreq, bus) {
     const ctx = AUDIO.ctx;
     if (!ctx) return;
     const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
@@ -67,7 +72,7 @@ import * as THREE from './three.module.min.js';
     const g = ctx.createGain();
     g.gain.setValueAtTime(vol || 0.08, t);
     g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
-    src.connect(f); f.connect(g); g.connect(ctx.destination);
+    src.connect(f); f.connect(g); g.connect(bus || ctx.destination);
     src.start(t);
   }
 
@@ -75,6 +80,7 @@ import * as THREE from './three.module.min.js';
   function startMusic() {
     const ctx = ensureAudio();
     if (!ctx || !AUDIO.musicOn || AUDIO.musicTimer) return;
+    if (AUDIO.musicBus) AUDIO.musicBus.gain.setTargetAtTime(1, ctx.currentTime, 0.05);
     AUDIO.nextT = ctx.currentTime + 0.1;
     AUDIO.step = 0;
     AUDIO.musicTimer = setInterval(() => {
@@ -89,21 +95,24 @@ import * as THREE from './three.module.min.js';
   function stopMusic() {
     clearInterval(AUDIO.musicTimer);
     AUDIO.musicTimer = null;
+    if (AUDIO.ctx && AUDIO.musicBus) {
+      AUDIO.musicBus.gain.setTargetAtTime(0, AUDIO.ctx.currentTime, 0.03); // 立即静音所有已调度音符
+    }
   }
   function scheduleMusicStep(step, t) {
-    const ctx = AUDIO.ctx;
+    const bus = AUDIO.musicBus;
     const bar = Math.floor(step / 16) % 4;
     const s = step % 16;
     const chord = MUSIC_CHORDS[bar];
     // 贝斯（每拍根音）
-    if (s % 4 === 0) tone(chord[0] / 2, MUSIC_STEP * 2, 'square', 0.05, null, 320);
+    if (s % 4 === 0) tone(chord[0] / 2, MUSIC_STEP * 2, 'square', 0.05, null, 320, bus);
     // 琶音（八分音符）
     const note = chord[s % chord.length] * (s === 4 || s === 12 ? 2 : 1);
-    tone(note, MUSIC_STEP * 0.9, 'triangle', 0.035, null, 2600);
+    tone(note, MUSIC_STEP * 0.9, 'triangle', 0.035, null, 2600, bus);
     // 鼓
-    if (s === 0 || s === 8) tone(120, 0.12, 'sine', 0.09, 42);           // Kick
-    if (s === 4 || s === 12) noiseAt(t, 0.1, 0.05, 'highpass', 1500);    // 军鼓
-    if (s % 2 === 1) noiseAt(t, 0.03, 0.02, 'highpass', 6000);           // 踩镲
+    if (s === 0 || s === 8) tone(120, 0.12, 'sine', 0.09, 42, null, bus);   // Kick
+    if (s === 4 || s === 12) noiseAt(t, 0.1, 0.05, 'highpass', 1500, bus);  // 军鼓
+    if (s % 2 === 1) noiseAt(t, 0.03, 0.02, 'highpass', 6000, bus);         // 踩镲
   }
 
   // ---- 武器/战斗音效 ----
@@ -163,7 +172,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260823 · 修复激光束崩溃/锁定重发 · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260824 · 激光持续伤害/移速翻倍/音乐总线/楼梯修正 · 如加载旧版请强制刷新/清除缓存');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -1163,6 +1172,10 @@ import * as THREE from './three.module.min.js';
     mechChoicesCache = list;
     if (msSelected < 0 || !list.some((c) => c.index === msSelected)) msSelected = list[0].index;
     el.classList.remove('hidden');
+    // 释放指针锁定并复位开火：选择机甲时鼠标可点击按钮、不触发转视角/攻击
+    document.exitPointerLock && document.exitPointerLock();
+    fire = false;
+    touchFire = false;
     btns.innerHTML = list.map((c) =>
       '<button class="ms-btn' + (c.index === msSelected ? ' selected' : '') + '" data-i="' + c.index + '">' +
       mechDisplayName(c.type) + '</button>').join('');
@@ -1814,6 +1827,8 @@ import * as THREE from './three.module.min.js';
       deathOverlay.classList.add('hidden');
       updateMechSelect(m);
     } else {
+      fire = false; // 死亡时复位开火
+      touchFire = false;
       if (gameMode === 'duel' && m.lives === 0) {
         deathText.textContent = '💥 机甲全部损毁，进入观战';
         respawnText.textContent = '鼠标移动环视战场';
@@ -2495,6 +2510,7 @@ import * as THREE from './three.module.min.js';
   document.addEventListener('pointerlockchange', () => {
     if (!started || isTouch || ctfVoting()) return;
     const locked = document.pointerLockElement === renderer.domElement;
+    if (!locked) fire = false; // 解锁时复位开火，避免卡键连续射击
     if (locked) showHint('已锁定鼠标 · 移动鼠标旋转视角 · ESC 解锁', 2000);
     else showHint('点击画面重新锁定（CS:GO 视角）· 右键拖拽也可转视角', 4000);
   });

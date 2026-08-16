@@ -818,7 +818,6 @@ class Game {
       this.updateWeapons(p, dt, now);
       this.checkPickups(p, now);
     }
-    this.updateBurns(dt, now);
     this.updateProjectiles(dt, now);
     this.updatePickups(now);
     if (this.mode === 'zone') this.updateZone(now);
@@ -928,7 +927,7 @@ class Game {
         kind: 'bullet', owner: p.id,
         x: origin.x, y: origin.y, z: origin.z,
         dx, dy, dz,
-        speed: 70, life: 1.1,
+        speed: 90, life: 1.1,
         lockedId: locked ? locked.id : null, // 飞行中温和修正
       });
       ws.ammo--;
@@ -980,19 +979,8 @@ class Game {
       targetId: hit.player ? hit.player.id : null,
     });
     if (hit.player) {
-      const burn = hit.player.burns.get(p.id);
-      if (burn) {
-        burn.endsAt = now + w.burnMs;
-        burn.part = hit.part;
-        burn.legIndex = hit.legIndex;
-      } else {
-        hit.player.burns.set(p.id, {
-          dps: w.dmgPerSec * (this.cfg.weaponDmgMul || 1),
-          endsAt: now + w.burnMs,
-          part: hit.part,
-          legIndex: hit.legIndex,
-        });
-      }
+      // 照射持续伤害（无残留灼烧）：光束接触期间每秒 dmgPerSec，停止照射即停止伤害
+      this.damageModule(hit.player, hit.part, w.dmgPerSec * (this.cfg.weaponDmgMul || 1) * dt, p.id, now, hit.legIndex);
     }
   }
 
@@ -1275,6 +1263,7 @@ class Game {
     p.vel.x = 0; p.vel.y = 0; p.vel.z = 0;
     p.alive = true;
     p.respawnAt = 0;
+    p.input.fire = false; // 复活时重置开火，避免卡键连续射击
     this.sendMe(p);
   }
 

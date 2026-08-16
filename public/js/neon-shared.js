@@ -53,7 +53,7 @@
       name: '泰坦',
       legs: 2, legHp: 100, chestHp: 250, coreHp: 100,
       mounts: 4,
-      moveMul: 0.25, // 重型机甲：移速减缓 75%
+      moveMul: 0.5, // 重型机甲：移速减半（翻倍后）
       // 各武器槽枪口位置（本地坐标，绕 yaw 旋转后为世界位置）
       muzzlePos: [
         { x: -0.72, y: 1.68, z: 0.14 }, // 左上（落于肩膀上）
@@ -71,7 +71,7 @@
       name: '猎蛛',
       legs: 6, legHp: 50, chestHp: 100, coreHp: 100,
       mounts: 3,
-      moveMul: 0.5, // 移速减缓 50%
+      moveMul: 1.0, // 移速（翻倍后）
       muzzlePos: [
         { x: -0.95, y: 1.02, z: 0.1 }, // 左侧
         { x: 0.95, y: 1.02, z: 0.1 },  // 右侧
