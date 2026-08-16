@@ -37,6 +37,7 @@
   const ZONE_WIN = 120;           // 占点模式获胜积分
   const ZONE_R = 4.5;             // 占领区半径
   const VOTE_CHANGE_MS = 3000;    // CTF 投票改选冷却
+  const STEP_HEIGHT = 1.1;        // 台阶自动攀爬最大高度（斜坡/阶梯用）
 
   // ---------- 机甲定义（War Robots 风格） ----------
   const MODULE_LEG = 'leg';
@@ -63,6 +64,7 @@
       name: '蜘蛛机器人',
       legs: 6, legHp: 50, chestHp: 100, coreHp: 100,
       mounts: 3,
+      moveMul: 0.5, // 移速减缓 50%
       // 损毁 0..6 条腿：-0%/-5%/-25%/-50%/-80%/-95%/-100%（失去行动能力）
       legSpeedMul: [1, 0.95, 0.75, 0.5, 0.2, 0.05, 0],
       legHeight: 0.7, chestHeight: 1.3,
@@ -164,7 +166,12 @@
     if (axis === 'x' || axis === 'z') {
       for (const c of colliders) {
         if (!overlapAABB(aabb, c)) continue;
-        if (pos.y >= c.maxY - 0.001) continue;
+        if (pos.y >= c.maxY - 0.001) continue; // 已站在顶上
+        // 台阶/斜坡：顶部高于脚底不超过 STEP_HEIGHT 且未在上升 → 自动迈上台阶
+        if (c.maxY - pos.y <= STEP_HEIGHT + 0.001 && vel.y <= 0.5) {
+          pos.y = c.maxY;
+          continue;
+        }
         if (axis === 'x') {
           if (vel.x > 0) { pos.x = c.minX - PLAYER_R - 0.001; vel.x = 0; }
           else if (vel.x < 0) { pos.x = c.maxX + PLAYER_R + 0.001; vel.x = 0; }
@@ -195,7 +202,7 @@
     PLAYER_R, PLAYER_H, EYE_H, MAX_HEALTH, FIRE_CD,
     PROJ_SPEED, PROJ_R, PROJ_LIFE, DMG, RESPAWN_MS, MAX_PLAYERS,
     PICKUP_RANGE, PICKUP_RESPAWN_MS, PICKUP_HEAL, KILLFEED_MAX,
-    ZONE_WIN, ZONE_R, VOTE_CHANGE_MS,
+    ZONE_WIN, ZONE_R, VOTE_CHANGE_MS, STEP_HEIGHT,
     MODULE_LEG, MODULE_CHEST, MODULE_CORE, CORE_HIT_CHANCE,
     MECHS, DEFAULT_MECH, WEAPONS, DEFAULT_WEAPON,
     mechSpeedMul, normalizeWeapons, normalizeMech,

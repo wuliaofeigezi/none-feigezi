@@ -73,12 +73,12 @@ game.tick();
 console.log('移动后位置:', pA.pos.x.toFixed(2), pA.pos.y.toFixed(2), pA.pos.z.toFixed(2), 'yaw:', pA.yaw.toFixed(2), 'vel.z:', pA.vel.z.toFixed(2));
 assert(pA.pos.z < 14 && pA.pos.x === 0 && pA.pos.y === 0, 'yaw=0 前进应沿 -z 且贴地');
 
-// ---- 2. 跳跃 ----
+// ---- 2. 跳跃已禁用（所有机甲不可手动跳跃） ----
 place(pA, 0, 14);
 input(A, { jump: true });
 game.tick();
 game.tick();
-assert(pA.vel.y > 0 && pA.pos.y > 0, '应跳起');
+assert(pA.vel.y <= 0 && pA.pos.y <= 0.01, '跳跃已禁用，不应跳起');
 
 // ---- 3. 跳跳台 ----
 place(pA, MAP.jumpPads[0].x, MAP.jumpPads[0].z);
@@ -194,7 +194,7 @@ pB.legsDestroyed = 0;
 input(B, { fwd: 1, yaw: Math.PI });
 game.tick();
 const spd0 = Math.abs(pB.vel.z);
-assert(Math.abs(spd0 - 9.5) < 0.01, '蜘蛛满血移速应为 9.5');
+assert(Math.abs(spd0 - 4.75) < 0.01, '蜘蛛满血移速应为 4.75（移速减缓50%）');
 const spiderMuls = [0.95, 0.75, 0.5, 0.2, 0.05, 0];
 for (let i = 0; i < 6; i++) {
   pB.mech.legs[i] = 0;
@@ -219,11 +219,12 @@ for (let i = 0; i < 40; i++) {
 console.log('蜘蛛爬墙后 y:', pB.pos.y.toFixed(2), 'climbing:', pB.climbing);
 assert(climbed, '蜘蛛应能爬墙上升');
 
-// ---- 14.6 武器索敌：锁定后即使不瞄向目标，弹体强导也能命中 ----
+// ---- 14.6 武器索敌：锁定后即使不瞄向目标，弹体也能命中 ----
 setWeapon(pA, 'gau12');
-game.onLock('A', { targetId: 'B' }); // 客户端上报锁定 B
 place(pA, 0, 12);
 place(pB, 0, 16);
+game.onLock('A', { targetId: 'B' }); // 先放置再锁定（有视线）
+assert(game.players.get('A').lockId === 'B', '有视线时应锁定成功');
 input(A, { fire: true, yaw: 0, pitch: 0 }); // 瞄向 -z（完全背对 B）
 const lockSum0 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
 game.tick(); // 发射（弹体强导转向 B）
@@ -261,7 +262,7 @@ const aimSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
 console.log('准星瞄准命中后模块总血量:', aimSum1, '<', aimSum0);
 assert(aimSum1 < aimSum0, '未索敌时子弹应朝准星瞄准点开火');
 
-// ---- 15. 死斗模式：两次生命 + 基地核心判定 ----
+// ---- 15. 死斗模式（大局计分制）：回合制，先赢 2 回合获胜 ----
 const D = fakeSocket('D');
 const E = fakeSocket('E');
 const duelGame = new Game(io, 'room_duel', { mode: 'duel', maxPlayers: 8, matchMinutes: 5 }, {});
@@ -278,20 +279,31 @@ const pD = duelGame.players.get('D');
 const pE = duelGame.players.get('E');
 assert(pD.team !== pE.team, '死斗应分属两队');
 assert(pD.lives === 2 && pD.mechs.length === 2, '死斗应携带两台机甲（两次生命）');
-// 死亡一次 → 标记该机甲损毁，自动出下一台未损毁机甲
+// 第 1 回合：D 击杀一次 → 换蜘蛛；再击杀 → 出局 → E 队赢得回合
 duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
 assert(!pD.alive && pD.usedMechs.has(0) && pD.lives === 1, '死亡一次应消耗一台机甲');
 pD.respawnAt = Date.now();
 duelGame.tick();
 assert(pD.alive && pD.mechType === 'spider', '第二台机甲应为蜘蛛');
-// 再死一次 → 两台都用完出局不可复活
 duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
-assert(!pD.alive && pD.usedMechs.size === 2 && pD.lives === 0 && pD.respawnAt === 0, '两次死亡后应出局');
-// 全灭判定：D 出局后只剩 E 队 → E 队获胜
+assert(!pD.alive && pD.usedMechs.size === 2 && pD.lives === 0, '两次死亡后应出局');
 duelGame.tick();
-assert(duelGame.duel.winnerTeam === pE.team, '一方全灭应判另一方获胜');
+assert(duelGame.duel.phase === 'roundOver' && duelGame.duel.roundWins[pE.team] === 1, 'E 队应赢得第 1 回合');
+// 第 2 回合：重置后再次全灭 D → E 队赢下大局
+duelGame.duel.roundOverAt = Date.now();
+duelGame.tick(); // 进入第 2 回合（重置）
+assert(duelGame.duel.round === 2 && duelGame.duel.phase === 'play', '应开始第 2 回合');
+assert(pD.usedMechs.size === 0 && pD.lives === 2, '回合开始应重置机甲');
+duelGame.tick(); // 全员复活
+assert(pD.alive, '第 2 回合应复活');
+duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
+pD.respawnAt = Date.now();
+duelGame.tick();
+duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
+duelGame.tick();
+assert(duelGame.duel.roundWins[pE.team] === 2 && duelGame.duel.winnerTeam === pE.team, 'E 队应赢下大局（2:0）');
 const overEvt = emitted.find(([ev, d]) => ev === 'game:over' && d && d.mode === 'duel');
-assert(overEvt && overEvt[1].duel && overEvt[1].duel.winnerTeam === pE.team, 'game:over 应携带死斗结果');
+assert(overEvt && overEvt[1].duel && overEvt[1].duel.roundWins && overEvt[1].duel.roundWins[pE.team] === 2, 'game:over 应携带大局比分');
 
 // ---- 16. 断线重连恢复（Game 层）：同 sessionId 恢复原玩家，并返回旧 socketId ----
 game.onLeave('A');

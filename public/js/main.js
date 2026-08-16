@@ -46,6 +46,7 @@ import * as THREE from './three.module.min.js';
     pauseSuicideBtn = $('pauseSuicideBtn'), pauseLeaveBtn = $('pauseLeaveBtn'),
     suicideBar = $('suicideBar'), suicideFill = $('suicideFill'),
     lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash'),
+    teamAlive = $('teamAlive'), taRed = $('taRed'), taBlue = $('taBlue'), taScore = $('taScore'),
     mechSelect = $('mechSelect'), msButtons = $('msButtons'),
     msWeapons = $('msWeapons'), msCountdown = $('msCountdown'), msConfirm = $('msConfirm');
 
@@ -310,6 +311,17 @@ import * as THREE from './three.module.min.js';
     socket.on('duel:lives', (d) => {
       if (d && d.id === (me && me.id) && d.lives === 0) {
         showBanner('💥 你的机甲已全部损毁，出局！', 3000);
+      }
+    });
+    socket.on('duel:round', (d) => {
+      if (!d) return;
+      if (d.cause === 'start') {
+        showBanner('⚔ 第 ' + d.round + ' 回合开始！', 2000);
+      } else if (d.winnerTeam !== null && d.winnerTeam !== undefined) {
+        showBanner('🏁 第 ' + d.round + ' 回合：' + (d.winnerTeam === 0 ? '🔴红队' : '🔵蓝队') + ' 获胜！大局 ' + d.roundWins[0] + ':' + d.roundWins[1], 3000);
+        beep(660, 0.2, 'triangle', 0.08);
+      } else {
+        showBanner('🏁 第 ' + d.round + ' 回合平局', 2500);
       }
     });
 
@@ -812,12 +824,13 @@ import * as THREE from './three.module.min.js';
     }
   }
 
-  // 锁定框跟随锁定目标 + 距离
+  // 锁定框跟随服务端确认的锁定（距离过远/墙阻隔时服务端自动解锁）
   function updateLockBox() {
     if (!lockBox || !lockDist) return;
-    const show = started && lockTargetId && remotePlayers.has(lockTargetId) && me && me.alive;
+    const tid = me && me.lockId;
+    const show = started && tid && me.alive && remotePlayers.has(tid);
     if (!show) { lockBox.classList.add('hidden'); return; }
-    const rp = remotePlayers.get(lockTargetId);
+    const rp = remotePlayers.get(tid);
     const center = new THREE.Vector3().copy(rp.target).add({ x: 0, y: 1.1, z: 0 });
     const v = projectToScreen(center);
     if (v.behind) { lockBox.classList.add('hidden'); return; }
@@ -1198,6 +1211,23 @@ import * as THREE from './three.module.min.js';
     }
   }
 
+  // 顶部每方存活人数：一个小人 = 一个玩家；熄灭 = 无法复活（出局）
+  function updateTeamAlive(players, duel) {
+    if (!teamAlive || !taRed || !taBlue || !taScore) return;
+    if (gameMode !== 'duel' && gameMode !== 'ctf') { teamAlive.classList.add('hidden'); return; }
+    teamAlive.classList.remove('hidden');
+    const groups = [taRed, taBlue];
+    for (let t = 0; t < 2; t++) {
+      const list = (players || []).filter((p) => p.team === t);
+      groups[t].innerHTML = list.map((p) => {
+        // 无法复活：死斗出局（lives<=0）或断线
+        const dead = (gameMode === 'duel' && p.lives <= 0) || !p.connected;
+        return '<span class="ta-icon' + (dead ? ' dead' : '') + '" title="' + (p.name || '') + '">🧍</span>';
+      }).join('');
+    }
+    if (duel && duel.roundWins) taScore.textContent = duel.roundWins[0] + ' : ' + duel.roundWins[1];
+  }
+
   // ---------- 暂停 / 自杀 ----------
   function setPause(open) {
     pauseOpen = open;
@@ -1264,6 +1294,7 @@ import * as THREE from './three.module.min.js';
     lockTargetId = null;
     spectateId = null;
     if (lockBox) lockBox.classList.add('hidden');
+    if (teamAlive) teamAlive.classList.add('hidden');
     if (mechSelect) mechSelect.classList.add('hidden');
     if (socket && socket.connected) sendLock(null);
     for (const id of [...remotePlayers.keys()]) removeRemotePlayer(id);
@@ -1519,7 +1550,7 @@ import * as THREE from './three.module.min.js';
           me.mechType = sp.mechType;
           updateModuleHud(me);
         }
-        me.lives = sp.lives; me.mechIndex = sp.mechIndex;
+        me.lives = sp.lives; me.mechIndex = sp.mechIndex; me.lockId = sp.lockId;
         if (me.alive) {
           serverTarget.set(sp.x, sp.y, sp.z);
           const dx = sp.x - myPos.x, dy = sp.y - myPos.y, dz = sp.z - myPos.z;
@@ -1575,6 +1606,8 @@ import * as THREE from './three.module.min.js';
     }
     // 死斗 HUD（基地核心部署进度 / 剩余机甲）
     if (gameMode === 'duel' && payload.duel) updateDuelHud(payload.duel);
+    // 顶部每方存活人数 + 大局比分
+    updateTeamAlive(payload.players, payload.duel);
     // 命中 / 受击反馈
     if (payload.hits && me) {
       for (const h of payload.hits) {
@@ -2066,7 +2099,6 @@ import * as THREE from './three.module.min.js';
     myVel.x = (fx * fwd + rx * strafe) * MOVE_SPEED * localMoveMul();
     myVel.z = (fz * fwd + rz * strafe) * MOVE_SPEED * localMoveMul();
 
-    const wasGrounded = grounded;
     grounded = false;
     // 蜘蛛爬墙本地预测（与服务端一致）
     const canClimbSelf = me && me.mechType === 'spider' && me.mech && me.mech.legs.some((h) => h > 0);
@@ -2093,10 +2125,7 @@ import * as THREE from './three.module.min.js';
         myVel.y = pad.strength;
       }
     }
-    if (inputJump() && (grounded || wasGrounded)) {
-      myVel.y = JUMP_VEL * localJumpMul();
-      grounded = false;
-    }
+    // 已禁用跳跃（跳跳台弹射保留）
   }
 
   // =========================================================
@@ -2148,15 +2177,15 @@ import * as THREE from './three.module.min.js';
       spectateCamera(dt);
       if (selfModel) selfModel.visible = false;
     } else {
-      // 和平精英式第三人称：相机高且远、看向玩家前上方，机甲位于画面下部中央
-      const camDist = 11.0, camHgt = 2.2;
+      // 第三人称：水平平视时完整机甲位于画面中下方、约占屏幕高度 1/5
+      const camDist = 6.2, camHgt = 2.4;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       let camPos = collideCamera(
-        px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.45, pz + Math.cos(yaw) * cpc * camDist,
-        px, py + 1.6, pz
+        px + Math.sin(yaw) * cpc * camDist, py + camHgt, pz + Math.cos(yaw) * cpc * camDist,
+        px, py + 1.2, pz
       );
       // 相机被地形挡住拉近时：抬高越过障碍，避免机甲糊脸遮挡
-      if (Math.hypot(camPos.x - px, camPos.z - pz) < 3.2) {
+      if (Math.hypot(camPos.x - px, camPos.z - pz) < 3.0) {
         camPos.y = py + 5.0;
         camPos.x = px + Math.sin(yaw) * cpc * 2.0;
         camPos.z = pz + Math.cos(yaw) * cpc * 2.0;
@@ -2167,7 +2196,8 @@ import * as THREE from './three.module.min.js';
         camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
         camShake = Math.max(0, camShake - dt * 10);
       }
-      camera.lookAt(px - Math.sin(yaw) * 12, py + 1.6 + spc * 8, pz - Math.cos(yaw) * 12);
+      // 平视时相机视线水平（机甲完整落在画面中下方 1/5）；俯仰绕机甲旋转
+      camera.lookAt(px - Math.sin(yaw) * 8, py + camHgt + spc * 8, pz - Math.cos(yaw) * 8);
 
       // ===== 自机机甲模型（第三人称可见） =====
       if (selfModel) {

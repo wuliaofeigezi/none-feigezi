@@ -120,6 +120,15 @@
   .weapon-slot.w-laser .ws-name{color:#ff9db8;}
   .weapon-slot.w-loiter .ws-name{color:#ffd98a;}
 
+  /* ===== 顶部存活人数 / 大局比分 ===== */
+  #teamAlive{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center;pointer-events:none;z-index:6;}
+  .ta-group{display:flex;gap:3px;background:rgba(10,13,30,.72);border:1px solid #2b3a7a;border-radius:10px;padding:4px 10px;}
+  .ta-group.red{border-color:#a33b5c;}
+  .ta-group.blue{border-color:#2f4a9b;}
+  .ta-icon{font-size:15px;filter:drop-shadow(0 0 3px rgba(125,249,255,.6));}
+  .ta-icon.dead{filter:grayscale(1) brightness(.35);opacity:.45;}
+  .ta-vs{font-size:12px;font-weight:700;color:#ffe9a8;background:rgba(10,13,30,.72);border:1px solid #b98a1f;border-radius:10px;padding:4px 10px;white-space:nowrap;}
+
   /* ===== 机甲模块 HUD ===== */
   #moduleHud{position:absolute;left:14px;bottom:90px;width:210px;background:rgba(5,10,25,.72);border:1px solid rgba(125,249,255,.3);border-radius:10px;padding:8px 10px;pointer-events:none;}
   .mh-title{font-size:11px;color:#7dd3fc;margin-bottom:4px;}
@@ -242,6 +251,12 @@
     <div id="respawnText"></div>
   </div>
   <div id="lookHint" class="hidden"></div>
+  <!-- 顶部每方存活人数（熄灭=无法复活）+ 死斗大局比分 -->
+  <div id="teamAlive" class="hidden">
+    <div class="ta-group red" id="taRed"></div>
+    <div class="ta-vs">大局 <span id="taScore">0 : 0</span></div>
+    <div class="ta-group blue" id="taBlue"></div>
+  </div>
   <div id="touchUI" class="hidden">
     <div id="joyBase"><div id="joyKnob"></div></div>
     <div id="fireBtn">开火</div>

@@ -59,6 +59,8 @@ const DUEL_BASES = [
 ];
 const DUEL_CORE_RADIUS = 4.5;    // 核心判定半径
 const DUEL_DEPLOY_SEC = 10;      // 部署装置所需秒数
+const DUEL_ROUND_MS = 90 * 1000; // 每回合时长上限（到时按击杀数判定）
+const DUEL_ROUND_WINS = 2;       // 大局计分：先赢 2 回合获胜
 
 // 武器索敌（锁定）
 const LOCK_RANGE = 70;           // 锁定最大距离（米）
@@ -131,14 +133,20 @@ class Game {
     this._ended = false;
     this.zone = { spot: 0, x: ZONE_SPOTS[0].x, z: ZONE_SPOTS[0].z, y: ZONE_SPOTS[0].y, r: ZONE_R, nextMoveAt: 0 };
 
-    // 死斗模式状态
+    // 死斗模式状态（大局计分制：回合制，先赢 DUEL_ROUND_WINS 回合获胜）
     this.duel = null;
     if (this.mode === 'duel') {
       this.duel = {
+        phase: 'play',            // play | roundOver
+        round: 1,
+        roundWins: [0, 0],        // 大局计分（回合胜场）
+        roundKills: [0, 0],       // 本回合击杀数（回合到时判定）
+        roundEndsAt: 0,
+        roundOverAt: 0,
         bases: DUEL_BASES.map((b) => ({ team: b.team, x: b.x, z: b.z, coreAlive: true, deploy: 0 })),
         coreRadius: DUEL_CORE_RADIUS,
         deployNeed: DUEL_DEPLOY_SEC,
-        winnerTeam: null,
+        winnerTeam: null,         // 大局胜方
       };
     }
 
@@ -173,6 +181,7 @@ class Game {
     if (this.timer.unref) this.timer.unref();
     this.zone.nextMoveAt = Date.now() + ZONE_MOVE_MS;
     if (this.mode === 'ctf') this.startCtfRound();
+    if (this.mode === 'duel') this.duel.roundEndsAt = Date.now() + DUEL_ROUND_MS;
     console.log(`[neon-arena][${this.roomId}] 对局开始 ${this.mode} 人数上限 ${this.maxPlayers} 时长 ${this.durationMs / 60000}min`);
   }
 
@@ -427,9 +436,34 @@ class Game {
     const t = this.players.get(tid);
     if (!t || !t.alive || !t.connected) { p.lockId = null; return; }
     if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return; }
+    // 队友锁定共享：队友已锁定该目标则直接跟随锁定
+    if (isTeamMode(this.mode) && this.teammateLocked(p, tid)) { p.lockId = tid; return; }
     const dx = t.pos.x - p.pos.x, dz = t.pos.z - p.pos.z;
-    if (dx * dx + dz * dz > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return; }
+    if (dx * dx + dz * dz > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return; } // 距离过远
+    if (!this.hasLOS(p, t)) { p.lockId = null; return; } // 墙体阻隔
     p.lockId = tid;
+  }
+
+  // 两点间视线是否被墙体阻隔（瞄准高度）
+  hasLOS(a, b) {
+    const x0 = a.pos.x, y0 = a.pos.y + 1.2, z0 = a.pos.z;
+    const x1 = b.pos.x, y1 = b.pos.y + 1.0, z1 = b.pos.z;
+    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    const len = Math.hypot(dx, dy, dz);
+    const steps = Math.max(1, Math.ceil(len / 0.4));
+    for (let i = 1; i < steps; i++) {
+      const f = i / steps;
+      if (this.hitColliderAt(x0 + dx * f, y0 + dy * f, z0 + dz * f)) return false;
+    }
+    return true;
+  }
+
+  // 是否有队友正在锁定该目标（队友锁定可共享锁定）
+  teammateLocked(p, tid) {
+    for (const q of this.players.values()) {
+      if (q !== p && q.team === p.team && q.lockId === tid) return true;
+    }
+    return false;
   }
 
   // 局内选择机甲（开局与死亡后均可）：选定即出生
@@ -459,14 +493,19 @@ class Game {
     this.sendMe(p);
   }
 
-  // 返回当前有效锁定目标（或 null）
+  // 返回当前有效锁定目标（或 null）；距离过远/墙体阻隔则解锁，队友锁定可保持
   validLock(p) {
     if (!p.lockId) return null;
     const t = this.players.get(p.lockId);
     if (!t || !t.alive || !t.connected) { p.lockId = null; return null; }
     if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return null; }
     const dx = t.pos.x - p.pos.x, dz = t.pos.z - p.pos.z;
-    if (dx * dx + dz * dz > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return null; }
+    const d2 = dx * dx + dz * dz;
+    if (d2 > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return null; } // 距离过远
+    if (!this.hasLOS(p, t) && !(isTeamMode(this.mode) && this.teammateLocked(p, p.lockId))) {
+      p.lockId = null; // 墙体阻隔且队友未锁 → 解锁
+      return null;
+    }
     return t;
   }
 
@@ -638,11 +677,21 @@ class Game {
     if (c.scores[carrier.team] >= CTF_CAPTURE_TARGET) this.endCtfRound(carrier.team);
   }
 
-  // ---------- 死斗模式 ----------
+  // ---------- 死斗模式（大局计分制：回合制，先赢 2 回合获胜） ----------
   updateDuel(now) {
     const d = this.duel;
     if (!d || d.winnerTeam !== null) return;
-    // 1) 基地核心：敌方存活玩家靠近部署装置，累计 10 秒破坏核心直接获胜
+    if (d.phase === 'roundOver') {
+      if (now >= d.roundOverAt) this.startNextDuelRound(now);
+      return;
+    }
+    // 1) 回合到时：按本回合击杀数判定（平局无人得分，直接下一回合）
+    if (now >= d.roundEndsAt) {
+      const winner = d.roundKills[0] === d.roundKills[1] ? null : (d.roundKills[0] > d.roundKills[1] ? 0 : 1);
+      this.duelRoundWin(winner, now, 'time');
+      return;
+    }
+    // 2) 基地核心：敌方存活玩家靠近部署装置，累计 10 秒破坏核心 → 该队赢得回合
     for (const b of d.bases) {
       if (!b.coreAlive) continue;
       let enemyNear = false;
@@ -655,17 +704,15 @@ class Game {
         b.deploy = Math.min(d.deployNeed, b.deploy + TICK_MS / 1000);
         if (b.deploy >= d.deployNeed) {
           b.coreAlive = false;
-          d.winnerTeam = 1 - b.team;
-          this.emit('duel:core', { team: b.team, winnerTeam: d.winnerTeam, x: b.x, z: b.z });
-          console.log(`[neon-arena][${this.roomId}] [duel] 红/蓝基地核心被摧毁，${d.winnerTeam === 0 ? '红' : '蓝'}队获胜`);
-          this.endGame(d.winnerTeam);
+          this.emit('duel:core', { team: b.team, winnerTeam: 1 - b.team, x: b.x, z: b.z });
+          this.duelRoundWin(1 - b.team, now, 'core');
           return;
         }
       } else {
         b.deploy = Math.max(0, b.deploy - (TICK_MS / 1000) * 2); // 离开则快速衰减
       }
     }
-    // 2) 全灭判定：一方所有人都用完机甲（出局）→ 另一方获胜
+    // 3) 全灭判定：一方所有人都用完机甲（出局）→ 另一方赢得回合
     const teamActive = [false, false];
     for (const p of this.players.values()) {
       if (this.mode === 'duel') {
@@ -674,9 +721,46 @@ class Game {
         teamActive[p.team] = true;
       }
     }
-    if (!teamActive[0] && !teamActive[1]) return; // 同归于尽：等时间到按击杀判定
-    if (!teamActive[0]) { d.winnerTeam = 1; this.endGame(1); return; }
-    if (!teamActive[1]) { d.winnerTeam = 0; this.endGame(0); return; }
+    if (!teamActive[0] && !teamActive[1]) return; // 同归于尽：等回合到时按击杀判定
+    if (!teamActive[0]) { this.duelRoundWin(1, now, 'elim'); return; }
+    if (!teamActive[1]) { this.duelRoundWin(0, now, 'elim'); return; }
+  }
+
+  // 回合结束：计分 → 广播 → 判定大局胜负 / 准备下一回合
+  duelRoundWin(winner, now, cause) {
+    const d = this.duel;
+    if (d.phase === 'roundOver') return;
+    d.phase = 'roundOver';
+    d.roundOverAt = now + 3500;
+    if (winner === 0 || winner === 1) d.roundWins[winner]++;
+    this.emit('duel:round', {
+      round: d.round, roundWins: d.roundWins, winnerTeam: (winner === 0 || winner === 1) ? winner : null, cause,
+    });
+    console.log(`[neon-arena][${this.roomId}] [duel] 第${d.round}回合结束（${cause}）胜方=${winner === null ? '平局' : (winner === 0 ? '红' : '蓝')} 大局 ${d.roundWins[0]}:${d.roundWins[1]}`);
+    // 大局胜负已分：先赢 DUEL_ROUND_WINS 回合的队伍获胜
+    if ((winner === 0 || winner === 1) && d.roundWins[winner] >= DUEL_ROUND_WINS) {
+      d.winnerTeam = winner;
+      this.endGame(winner);
+    }
+  }
+
+  // 下一回合：重置核心/玩家机甲，全员重新部署
+  startNextDuelRound(now) {
+    const d = this.duel;
+    d.round++;
+    d.phase = 'play';
+    d.roundEndsAt = now + DUEL_ROUND_MS;
+    d.roundKills = [0, 0];
+    for (const b of d.bases) { b.coreAlive = true; b.deploy = 0; }
+    for (const p of this.players.values()) {
+      p.usedMechs.clear();
+      p.lives = p.mechs.length;
+      p.mechIndex = 0;
+      p.respawnAt = now; // 下一 tick 自动复活（玩家也可在机甲选择面板换机甲）
+      p.burns.clear();
+    }
+    this.emit('duel:round', { round: d.round, roundWins: d.roundWins, winnerTeam: null, cause: 'start' });
+    console.log(`[neon-arena][${this.roomId}] [duel] 第${d.round}回合开始`);
   }
 
   // ---------- tick ----------
@@ -1121,6 +1205,9 @@ class Game {
     if (validKill) {
       killer.kills++;
       killer.score += (this.mode === 'zone') ? 10 : 100;
+      if (this.mode === 'duel' && this.duel && this.duel.phase === 'play') {
+        this.duel.roundKills[killer.team]++; // 大局计分：本回合击杀
+      }
       this.sendMe(killer);
     }
     this.clearLocksOn(victim.id);
@@ -1223,11 +1310,7 @@ class Game {
         p.vel.y = pad.strength;
       }
     }
-
-    if (p.input.jump && (p.grounded || wasGrounded) && spd > 0) {
-      p.vel.y = this.cfg.jumpVel * ((this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_JUMP_MUL : 1);
-      p.grounded = false;
-    }
+    // 已禁用跳跃：所有机甲不可手动跳跃（跳跳台弹射保留）
   }
 
   checkPickups(p, now) {
@@ -1319,14 +1402,14 @@ class Game {
     }
     let duelResult = null;
     if (this.mode === 'duel' && this.duel) {
-      let wt = (winnerTeam === 0 || winnerTeam === 1) ? winnerTeam : null;
-      if (wt === null) {
-        // 到时：按队伍总击杀判定（平局则 null）
+      // 大局计分：按回合胜场判定（到时无胜方则按总击杀）
+      let wt = this.duel.winnerTeam;
+      if (wt !== 0 && wt !== 1) {
         const k = [0, 0];
         for (const p of this.players.values()) k[p.team] += p.kills;
         wt = k[0] === k[1] ? null : (k[0] > k[1] ? 0 : 1);
       }
-      duelResult = { winnerTeam: wt };
+      duelResult = { roundWins: this.duel.roundWins, winnerTeam: wt };
     }
     this.emit('game:over', { stats, durationMs: this.durationMs, mode: this.mode, ctf: ctfResult, duel: duelResult });
     console.log(`[neon-arena][${this.roomId}] 对局结束`);
@@ -1365,6 +1448,7 @@ class Game {
       weapons: this.weaponStateToJSON(p, now),
       lives: this.mode === 'duel' ? p.lives : null,
       mechIndex: this.mode === 'duel' ? p.mechIndex : null,
+      lockId: p.lockId,
       mechChoices: p.mechs.map((m, i) => ({ type: m.type, index: i, weapons: m.weapons.slice() }))
         .filter((c) => !(this.mode === 'duel' && p.usedMechs && p.usedMechs.has(c.index))),
       score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
@@ -1388,6 +1472,7 @@ class Game {
         weapons: p.weapons,
         weaponState: this.weaponStateToJSON(p, now),
         climbing: !!p.climbing,
+        lockId: p.lockId,
         mech: {
           legs: p.mech.legs, chest: p.mech.chest, core: p.mech.core,
           chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
@@ -1421,6 +1506,10 @@ class Game {
     let duel = null;
     if (this.mode === 'duel' && this.duel) {
       duel = {
+        phase: this.duel.phase,
+        round: this.duel.round,
+        roundWins: this.duel.roundWins,
+        roundEndsAt: this.duel.roundEndsAt,
         bases: this.duel.bases.map((b) => ({
           team: b.team, x: b.x, z: b.z, coreAlive: b.coreAlive, deploy: b.deploy,
         })),
