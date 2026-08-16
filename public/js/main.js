@@ -32,14 +32,16 @@ import * as THREE from './three.module.min.js';
     votePanel = $('votePanel'), voteCountdown = $('voteCountdown'), voteCards = $('voteCards'), voteStatus = $('voteStatus'),
     banner = $('banner');
 
-  // ===== 常量（与服务器一致） =====
-  const TICK_MS = 50;
-  const GRAVITY = 24, MOVE_SPEED = 9.5, JUMP_VEL = 9.8;
-  const PLAYER_R = 0.45, PLAYER_H = 1.8, EYE_H = 1.6;
+  // ===== 常量（单一事实来源：public/js/neon-shared.js，禁止在此重复定义） =====
+  const NS = window.NeonShared;
+  const {
+    TICK_MS, GRAVITY, MOVE_SPEED, JUMP_VEL, MAX_FALL, PLAYER_R, EYE_H,
+    clamp, lerpAngle, toAABB, moveAxis,
+  } = NS;
   const SENS = 0.0022;
-  const FIRE_CD = 300;
+  const FIRE_CD = Math.round(NS.FIRE_CD * 1000); // 300ms（与服务端 FIRE_CD=0.3s 同一来源）
   const FIXED_DT = TICK_MS / 1000; // 固定物理步长（与服务器 20Hz tick 完全一致）
-  const ZONE_WIN_CLIENT = 120;      // 占点模式获胜积分（与服务器一致）
+  const ZONE_WIN_CLIENT = NS.ZONE_WIN; // 占点模式获胜积分（与服务器一致）
 
   // ===== 触屏（手机端，类和平精英） =====
   const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
@@ -65,7 +67,7 @@ import * as THREE from './three.module.min.js';
   let roomList = [];               // 大厅房间列表
   let myReady = false;             // 我是否已准备
   // ===== CTF 夺旗卡牌赛 =====
-  const VOTE_CHANGE_MS = 3000;     // 投票改选冷却（与服务端一致）
+  const VOTE_CHANGE_MS = NS.VOTE_CHANGE_MS; // 投票改选冷却（与服务端一致，来自共享常量）
   let ctfState = null;             // 最新 state 里的 ctf 数据
   let myVote = -1;                 // 我投的卡下标
   let myVoteAt = 0;                // 我上次改选时间戳（冷却用）
@@ -124,13 +126,6 @@ import * as THREE from './three.module.min.js';
       mySessionId = 'sid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     }
     return mySessionId;
-  }
-  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-  function lerpAngle(a, b, t) {
-    let d = (b - a) % (Math.PI * 2);
-    if (d > Math.PI) d -= Math.PI * 2;
-    if (d < -Math.PI) d += Math.PI * 2;
-    return a + d * t;
   }
   function beep(freq, dur, type, vol) {
     try {
@@ -762,11 +757,7 @@ import * as THREE from './three.module.min.js';
   // 世界构建
   // =========================================================
   function buildWorld() {
-    colliders = mapData.boxes.map((b) => ({
-      minX: b.x - b.sx / 2, maxX: b.x + b.sx / 2,
-      minY: b.y - b.sy / 2, maxY: b.y + b.sy / 2,
-      minZ: b.z - b.sz / 2, maxZ: b.z + b.sz / 2,
-    }));
+    colliders = mapData.boxes.map(toAABB);
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x05070f);
@@ -1056,47 +1047,8 @@ import * as THREE from './three.module.min.js';
   }
 
   // =========================================================
-  // 本地物理（客户端预测，与服务器一致）
+  // 本地物理（客户端预测，与服务器一致；碰撞解析用共享 moveAxis）
   // =========================================================
-  function moveAxis(axis, dt) {
-    const prevPos = myPos[axis];
-    myPos[axis] += myVel[axis] * dt;
-    const aabb = {
-      minX: myPos.x - PLAYER_R, maxX: myPos.x + PLAYER_R,
-      minY: myPos.y, maxY: myPos.y + PLAYER_H,
-      minZ: myPos.z - PLAYER_R, maxZ: myPos.z + PLAYER_R,
-    };
-    if (axis === 'x' || axis === 'z') {
-      for (const c of colliders) {
-        if (!(aabb.minX < c.maxX && aabb.maxX > c.minX &&
-          aabb.minY < c.maxY && aabb.maxY > c.minY &&
-          aabb.minZ < c.maxZ && aabb.maxZ > c.minZ)) continue;
-        if (myPos.y >= c.maxY - 0.001) continue;
-        if (axis === 'x') {
-          if (myVel.x > 0) { myPos.x = c.minX - PLAYER_R - 0.001; myVel.x = 0; }
-          else if (myVel.x < 0) { myPos.x = c.maxX + PLAYER_R + 0.001; myVel.x = 0; }
-        } else {
-          if (myVel.z > 0) { myPos.z = c.minZ - PLAYER_R - 0.001; myVel.z = 0; }
-          else if (myVel.z < 0) { myPos.z = c.maxZ + PLAYER_R + 0.001; myVel.z = 0; }
-        }
-      }
-    } else {
-      const prevY = prevPos;
-      for (const c of colliders) {
-        if (!(aabb.minX < c.maxX && aabb.maxX > c.minX &&
-          aabb.minY < c.maxY && aabb.maxY > c.minY &&
-          aabb.minZ < c.maxZ && aabb.maxZ > c.minZ)) continue;
-        if (myVel.y < 0 && prevY >= c.maxY - 0.001) {
-          myPos.y = c.maxY;
-          grounded = true;
-          myVel.y = 0;
-        } else if (myVel.y > 0 && prevY + PLAYER_H <= c.minY + 0.001) {
-          myPos.y = c.minY - PLAYER_H;
-          myVel.y = 0;
-        }
-      }
-    }
-  }
 
   // 统一输入来源（键盘 + 触屏摇杆）
   function inputFwd() { return clamp((keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0) + joy.fwd, -1, 1); }
@@ -1129,7 +1081,7 @@ import * as THREE from './three.module.min.js';
 
   function localPhysics(dt) {
     myVel.y -= GRAVITY * localGravityMul() * dt;
-    if (myVel.y < -40) myVel.y = -40;
+    if (myVel.y < -MAX_FALL) myVel.y = -MAX_FALL;
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
     const fx = -sin, fz = -cos, rx = cos, rz = -sin;
     const fwd = inputFwd();
@@ -1139,9 +1091,9 @@ import * as THREE from './three.module.min.js';
 
     const wasGrounded = grounded;
     grounded = false;
-    moveAxis('x', dt);
-    moveAxis('z', dt);
-    moveAxis('y', dt);
+    moveAxis(myPos, myVel, 'x', dt, colliders);
+    moveAxis(myPos, myVel, 'z', dt, colliders);
+    if (moveAxis(myPos, myVel, 'y', dt, colliders)) grounded = true;
     if (myPos.y <= 0 && myVel.y <= 0) { myPos.y = 0; myVel.y = 0; grounded = true; }
     const half = mapData.size.x / 2 - PLAYER_R;
     myPos.x = clamp(myPos.x, -half, half);

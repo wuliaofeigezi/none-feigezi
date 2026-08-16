@@ -1,22 +1,14 @@
 'use strict';
 // 房间大厅系统 — RoomManager 管理多个房间，每房间一个 Game 实例（房间间广播隔离）
-const { Game, MAX_PLAYERS } = require('./game');
+const { Game } = require('./game');
+const { MAX_PLAYERS, clamp, sanitizeName } = require('../public/js/neon-shared.js');
 
 const MAX_ROOMS = 50;               // 单进程最大房间数
-const DEFAULT_MAX_PLAYERS = 16;
 const ROOM_PALETTE = [
   '#ff3b5c', '#3b82f6', '#22d3ee', '#a855f7', '#f59e0b', '#10b981',
   '#ec4899', '#84cc16', '#fb923c', '#eab308', '#06b6d4', '#f472b6',
   '#60a5fa', '#34d399', '#facc15', '#fb7185',
 ];
-
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-
-function sanitizeName(raw) {
-  if (typeof raw !== 'string') return '玩家';
-  const s = raw.trim().replace(/[\u0000-\u001f<>/\\]/g, '').slice(0, 16);
-  return s.length ? s : '玩家';
-}
 
 class Room {
   constructor(manager, io, hostSocket, opts) {
@@ -30,7 +22,7 @@ class Room {
     this.state = 'lobby';                       // lobby | playing
     this.settings = {
       mode: (opts && opts.mode === 'zone' || opts && opts.mode === 'ctf') ? opts.mode : 'ffa',
-      maxPlayers: clamp(parseInt(opts && opts.maxPlayers, 10) || DEFAULT_MAX_PLAYERS, 2, MAX_PLAYERS),
+      maxPlayers: clamp(parseInt(opts && opts.maxPlayers, 10) || MAX_PLAYERS, 2, MAX_PLAYERS),
       matchMinutes: clamp(parseInt(opts && opts.matchMinutes, 10) || 5, 1, 30),
     };
     this.players = new Map();                   // socketId -> LobbyPlayer
@@ -76,6 +68,22 @@ class Room {
     const next = this.players.values().next().value;
     this.hostId = next.socketId;
     next.isHost = true;
+  }
+
+  // 断线重连后的席位迁移：Game.resume 已把游戏内玩家 key 换成新 socketId，
+  // 房间席位必须同步迁移，否则 roomOf(新id) 找不到房间、对局结束后留下幽灵席位
+  migrateSeat(oldSocketId, newSocketId) {
+    if (oldSocketId === newSocketId) return true;
+    const p = this.players.get(oldSocketId);
+    if (!p || this.players.has(newSocketId)) return false;
+    const wasHost = this.hostId === oldSocketId;
+    this.players.delete(oldSocketId);
+    p.socketId = newSocketId;
+    p.isHost = wasHost;
+    this.players.set(newSocketId, p);
+    if (wasHost) this.hostId = newSocketId;
+    this.broadcastUpdate();
+    return true;
   }
 
   setReady(socketId, ready) {
@@ -237,8 +245,11 @@ class RoomManager {
       if (room.state === 'playing') {
         if (!room.game) return socket.emit('room:error', { code: 'NOT_FOUND' });
         // 断线重连：同 sessionId 恢复原玩家（分数/位置保留）
-        if (room.game.resume(socket, d.sessionId)) {
+        const resumedFrom = room.game.resume(socket, d.sessionId);
+        if (resumedFrom) {
           socket.join(room.id);
+          // 席位迁移：旧 socketId → 新 socketId（否则留下幽灵席位，房间永远无法清空）
+          room.migrateSeat(resumedFrom, socket.id);
           socket.emit('room:joined', { room: room.toJSON(), inGame: true });
           return;
         }

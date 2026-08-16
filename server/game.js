@@ -3,29 +3,19 @@
 // 模式：ffa 死亡竞赛 | zone 占点 | ctf 夺旗卡牌赛（每回合抽卡投票 + 夺旗）
 // 按房间作用域运行：每个房间一个 Game 实例，广播只发到本房间（io.to(roomId)）
 const { MAP } = require('./map');
+// 共享常量与工具（客户端/服务端唯一事实来源，禁止在本文件重复定义）
+const {
+  TICK_MS, GRAVITY, MOVE_SPEED, JUMP_VEL, MAX_FALL,
+  PLAYER_R, PLAYER_H, EYE_H, MAX_HEALTH, FIRE_CD, PROJ_SPEED, PROJ_R, PROJ_LIFE,
+  DMG, RESPAWN_MS, MAX_PLAYERS, PICKUP_RANGE, PICKUP_RESPAWN_MS, PICKUP_HEAL,
+  KILLFEED_MAX, ZONE_WIN, ZONE_R, VOTE_CHANGE_MS,
+  clamp, sanitizeName, toAABB, moveAxis,
+} = require('../public/js/neon-shared.js');
 
-// ---------- 基础参数（卡牌回合会用 cfg 覆盖） ----------
-const TICK_MS = 50; // 20 Hz
-const GRAVITY = 24;
-const MOVE_SPEED = 9.5;
-const JUMP_VEL = 9.8;
-const MAX_FALL = 40;
-const PLAYER_R = 0.45;
-const PLAYER_H = 1.8;
-const EYE_H = 1.6;
-const MAX_HEALTH = 100;
-const FIRE_CD = 0.3;
-const PROJ_SPEED = 44;
-const PROJ_R = 0.3;
-const PROJ_LIFE = 1.5;
-const DMG = 20;
-const RESPAWN_MS = 3000;
-const MAX_PLAYERS = 16;
+// ---------- 仅服务端参数 ----------
 const RECONNECT_GRACE_MS = 15000; // 断线保留时间：站桩等待同 sessionId 重连
 
-// 占点模式（Zone Control）
-const ZONE_R = 4.5;
-const ZONE_WIN = 120;
+// 占点模式（Zone Control）（ZONE_R / ZONE_WIN 来自共享常量）
 const ZONE_MOVE_MS = 15000;
 const ZONE_SCORE_PER_TICK = 0.1;
 const ZONE_SPOTS = [
@@ -51,7 +41,7 @@ const CTF_FLAG_RETURN_MS = 10000;// 旗落地后回基地时间
 const CTF_ROUND_WINS = 2;        // 先赢 2 回合的队伍获胜
 const CTF_MAX_ROUNDS = 5;        // 最多 5 回合（防僵局）
 const CTF_ROUND_OVER_MS = 3500;  // 回合结束停留时间
-const CTF_VOTE_CHANGE_MS = 3000; // 投票改选冷却（每 3 秒可改一次票）
+const CTF_VOTE_CHANGE_MS = VOTE_CHANGE_MS; // 投票改选冷却（共享常量，每 3 秒可改一次票）
 
 // 旗手惩罚（携带敌方旗帜时）
 const CTF_CARRIER_SPEED_MUL = 0.5;    // 移速 -50%
@@ -75,10 +65,7 @@ const CARD_POOL = [
   { id: 'storm', name: '弹幕', desc: '弹丸速度 +40%，射程更长', apply: (g) => { g.cfg.projSpeed *= 1.4; g.cfg.projLife *= 1.3; } },
 ];
 
-const KILLFEED_MAX = 8;
-const PICKUP_RANGE = 1.1;
-const PICKUP_RESPAWN_MS = 8000;
-const PICKUP_HEAL = 25;
+// KILLFEED_MAX / PICKUP_RANGE / PICKUP_RESPAWN_MS / PICKUP_HEAL 来自共享常量
 
 const COLORS = [
   '#ff3b5c', '#3b82f6', '#22d3ee', '#a855f7', '#f59e0b', '#10b981',
@@ -87,28 +74,7 @@ const COLORS = [
 ];
 const TEAM_COLORS = ['#ff3b5c', '#3b82f6']; // 红 / 蓝
 
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-
-function toAABB(b) {
-  return {
-    minX: b.x - b.sx / 2, maxX: b.x + b.sx / 2,
-    minY: b.y - b.sy / 2, maxY: b.y + b.sy / 2,
-    minZ: b.z - b.sz / 2, maxZ: b.z + b.sz / 2,
-  };
-}
 const colliders = MAP.boxes.map(toAABB);
-
-function overlapAABB(a, b) {
-  return a.minX < b.maxX && a.maxX > b.minX &&
-    a.minY < b.maxY && a.maxY > b.minY &&
-    a.minZ < b.maxZ && a.maxZ > b.minZ;
-}
-
-function sanitizeName(raw) {
-  if (typeof raw !== 'string') return '玩家';
-  const s = raw.trim().replace(/[\u0000-\u001f<>/\\]/g, '').slice(0, 16);
-  return s.length ? s : '玩家';
-}
 
 function defaultCfg(mode) {
   return {
@@ -218,7 +184,7 @@ class Game {
       });
       this.sendMe(p);
       console.log(`[neon-arena][${this.roomId}] [↻] ${p.name} 恢复连接`);
-      return true;
+      return oldId; // 返回旧 socketId，供 RoomManager 迁移房间席位
     }
     return false;
   }
@@ -522,10 +488,9 @@ class Game {
         }
       } else if (c.phase === 'roundOver') {
         if (now >= c.roundOverAt) {
-          // 回合数上限（防僵局）
+          // 回合数上限（防僵局）：直接结束整场，胜负由 endGame 依 roundWins 统计
           if (c.round >= CTF_MAX_ROUNDS) {
-            const winner = c.roundWins[0] === c.roundWins[1] ? null : (c.roundWins[0] > c.roundWins[1] ? 0 : 1);
-            if (winner !== null) this.endGame(); else this.endGame();
+            this.endGame();
             return;
           }
           this.startCtfRound();
@@ -639,9 +604,9 @@ class Game {
     const wasGrounded = p.grounded;
     p.grounded = false;
 
-    this.moveAxis(p, 'x', dt);
-    this.moveAxis(p, 'z', dt);
-    this.moveAxis(p, 'y', dt);
+    moveAxis(p.pos, p.vel, 'x', dt, colliders);
+    moveAxis(p.pos, p.vel, 'z', dt, colliders);
+    if (moveAxis(p.pos, p.vel, 'y', dt, colliders)) p.grounded = true;
 
     if (p.pos.y <= 0 && p.vel.y <= 0) {
       p.pos.y = 0; p.vel.y = 0; p.grounded = true;
@@ -661,42 +626,6 @@ class Game {
       // 旗手惩罚：跳跃降低
       p.vel.y = this.cfg.jumpVel * ((this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_JUMP_MUL : 1);
       p.grounded = false;
-    }
-  }
-
-  moveAxis(p, axis, dt) {
-    const prevPos = p.pos[axis];
-    p.pos[axis] += p.vel[axis] * dt;
-    const aabb = {
-      minX: p.pos.x - PLAYER_R, maxX: p.pos.x + PLAYER_R,
-      minY: p.pos.y, maxY: p.pos.y + PLAYER_H,
-      minZ: p.pos.z - PLAYER_R, maxZ: p.pos.z + PLAYER_R,
-    };
-    if (axis === 'x' || axis === 'z') {
-      for (const c of colliders) {
-        if (!overlapAABB(aabb, c)) continue;
-        if (p.pos.y >= c.maxY - 0.001) continue;
-        if (axis === 'x') {
-          if (p.vel.x > 0) { p.pos.x = c.minX - PLAYER_R - 0.001; p.vel.x = 0; }
-          else if (p.vel.x < 0) { p.pos.x = c.maxX + PLAYER_R + 0.001; p.vel.x = 0; }
-        } else {
-          if (p.vel.z > 0) { p.pos.z = c.minZ - PLAYER_R - 0.001; p.vel.z = 0; }
-          else if (p.vel.z < 0) { p.pos.z = c.maxZ + PLAYER_R + 0.001; p.vel.z = 0; }
-        }
-      }
-    } else {
-      const prevY = prevPos;
-      for (const c of colliders) {
-        if (!overlapAABB(aabb, c)) continue;
-        if (p.vel.y < 0 && prevY >= c.maxY - 0.001) {
-          p.pos.y = c.maxY;
-          p.grounded = true;
-          p.vel.y = 0;
-        } else if (p.vel.y > 0 && prevY + PLAYER_H <= c.minY + 0.001) {
-          p.pos.y = c.minY - PLAYER_H;
-          p.vel.y = 0;
-        }
-      }
     }
   }
 
