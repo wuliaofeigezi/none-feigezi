@@ -2178,7 +2178,7 @@ import * as THREE from './three.module.min.js';
       if (selfModel) selfModel.visible = false;
     } else {
       // 第三人称：相机降位（视角下移），平视时完整机甲落在画面中下方约 1/5 高度
-      const camDist = 6.6, camHgt = 1.9;
+      const camDist = 6.6, camHgt = 1.2;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       let camPos = collideCamera(
         px + Math.sin(yaw) * cpc * camDist, py + camHgt, pz + Math.cos(yaw) * cpc * camDist,
