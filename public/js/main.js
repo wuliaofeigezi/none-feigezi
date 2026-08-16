@@ -4,6 +4,9 @@ import * as THREE from './three.module.min.js';
 (function () {
   'use strict';
 
+  // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
+  console.log('[NeonArena] build 20260817 · 相机高度 camHgt = 1.2 · 如加载旧版请强制刷新/清除缓存');
+
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
   const hud = $('hud'),
