@@ -80,6 +80,7 @@ import * as THREE from './three.module.min.js';
   let colliders = [];
   let myPos = { x: 0, y: 0, z: 0 };
   let myVel = { x: 0, y: 0, z: 0 };
+  let corrX = 0, corrZ = 0; // 平滑位置纠正量（渲染帧按帧衰减应用，避免闪回）
   let grounded = true;
   let yaw = 0, pitch = 0;
   const keys = {};
@@ -591,14 +592,18 @@ import * as THREE from './three.module.min.js';
           const distXZ = Math.hypot(dx, dz);
           const distY = Math.abs(dy);
           const speed3d = Math.hypot(myVel.x, myVel.y, myVel.z);
-          // 水平小偏差贴合；竖直方向（跳起/落地顶点）给更大容差，避免原地跳跃闪回
-          const needSnap = distXZ > 2.5 || distY > 3.0 || (speed3d < 0.8 && distXZ > 0.35);
-          if (needSnap) {
+          const airborne = myPos.y > 0.02 || myVel.y > 0.5 || sp.y > 0.02;
+          if (distXZ > 2.5 || distY > 3.0) {
+            // 真实大偏差（重生/掉崖/跳台）：硬贴合
             myPos.x = sp.x; myPos.y = sp.y; myPos.z = sp.z;
-            myVel.x = 0; myVel.y = 0; myVel.z = 0;
-            grounded = true;
             prevStep.x = myPos.x; prevStep.y = myPos.y; prevStep.z = myPos.z;
             curStep.x = myPos.x; curStep.y = myPos.y; curStep.z = myPos.z;
+            if (!airborne) { myVel.x = 0; myVel.y = 0; myVel.z = 0; grounded = true; }
+            corrX = 0; corrZ = 0;
+          } else if (!airborne && speed3d < 0.8 && distXZ > 0.35) {
+            // 贴地小漂移：平滑拉回（渲染帧衰减应用，不硬传送不闪回；空中不做，落地自然收敛）
+            corrX = dx;
+            corrZ = dz;
           }
         }
         break;
@@ -1163,6 +1168,16 @@ import * as THREE from './three.module.min.js';
     lastT = now;
     if (dt > 0.25) dt = 0.25; // 防止卡顿/切页造成大步长
     if (!scene) return;
+
+    // 平滑位置纠正：状态同步的小偏差按帧衰减应用，消除闪回/抖动
+    if (corrX !== 0 || corrZ !== 0) {
+      const ck = Math.min(1, 6 * dt);
+      myPos.x += corrX * ck;
+      myPos.z += corrZ * ck;
+      corrX -= corrX * ck;
+      corrZ -= corrZ * ck;
+      if (Math.abs(corrX) < 0.02 && Math.abs(corrZ) < 0.02) { corrX = 0; corrZ = 0; }
+    }
 
     if (started && me && me.alive) {
       // 固定步长物理：与服务器 20Hz 完全一致，避免模拟漂移
