@@ -235,6 +235,46 @@ const lockSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
 console.log('索敌命中后模块总血量:', lockSum1, '<', lockSum0);
 assert(lockSum1 < lockSum0, '锁定时应命中锁定目标（即使未瞄向目标）');
 
+// ---- 14.6b 索敌规则：全图可锁（无距离限制），仅墙体阻隔 + 队友未锁时失败 ----
+// 远距离（80m，超过旧 70m 上限）无遮挡应可锁定
+place(pA, -40, -40);
+place(pB, 40, -40);
+game.onLock('A', { targetId: 'B' });
+assert(game.players.get('A').lockId === 'B', '远距离无遮挡应可锁定（无距离限制）');
+game.onLock('A', { targetId: null });
+// 墙体阻隔（纵向高墙 x=-14 两侧）且无队友锁定 → 应失败
+place(pA, -20, -22);
+place(pB, -8, -22);
+game.onLock('A', { targetId: 'B' });
+assert(game.players.get('A').lockId === null, '墙体阻隔且无队友锁定时应锁定失败');
+// 队友共享：LA 与 LC 同队已锁定 LB，LA 隔墙也能共享锁定（穿墙）
+const LC = fakeSocket('LC');
+const LB = fakeSocket('LB');
+const LA = fakeSocket('LA');
+const lockGame = new Game(io, 'room_lock', { mode: 'ctf', maxPlayers: 8, matchMinutes: 5 }, {});
+lockGame.start([
+  { socketId: 'LA', name: 'Alice', sessionId: 'sid_la' },
+  { socketId: 'LB', name: 'Bob', sessionId: 'sid_lb' },
+  { socketId: 'LC', name: 'Carol', sessionId: 'sid_lc' },
+]);
+clearInterval(lockGame.timer);
+lockGame.timer = null;
+lockGame.onMechSelect('LA', { index: 0 });
+lockGame.onMechSelect('LB', { index: 0 });
+lockGame.onMechSelect('LC', { index: 0 });
+const lA = lockGame.players.get('LA');
+const lB = lockGame.players.get('LB');
+const lC = lockGame.players.get('LC');
+assert(lA.team === lC.team && lA.team !== lB.team, '测试队伍分配应为 A=C≠B');
+place(lC, 6, -18);  // C 在东侧，与 B 之间有视线
+place(lB, -8, -18); // B 在墙东侧
+lockGame.onLock('LC', { targetId: 'LB' });
+assert(lC.lockId === 'LB', 'C 有视线应锁定成功');
+place(lA, -20, -18); // A 在墙西侧，与 B 隔墙无视线
+lockGame.onLock('LA', { targetId: 'LB' });
+assert(lA.lockId === 'LB', '队友已锁定 B 时 A 可隔墙共享锁定');
+assert(lockGame.validLock(lA) === lB, '共享锁定在后续校验中应保持有效');
+
 // ---- 14.7 局内换机甲：死亡后选择第二台机甲再部署 ----
 pA.mechs = [{ type: 'humanoid', weapons: [] }, { type: 'spider', weapons: [] }];
 pA.mechIndex = 0;

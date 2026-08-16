@@ -62,8 +62,7 @@ const DUEL_DEPLOY_SEC = 10;      // 部署装置所需秒数
 const DUEL_ROUND_MS = 90 * 1000; // 每回合时长上限（到时按击杀数判定）
 const DUEL_ROUND_WINS = 2;       // 大局计分：先赢 2 回合获胜
 
-// 武器索敌（锁定）
-const LOCK_RANGE = 70;           // 锁定最大距离（米）
+// 武器索敌（锁定）：无距离限制（全图可锁），仅墙体阻隔 + 队友未锁时失败
 
 // FragPunk 式卡牌池：apply 修改本回合 cfg（数值已适配机甲武器系统）
 const CARD_POOL = [
@@ -436,10 +435,8 @@ class Game {
     const t = this.players.get(tid);
     if (!t || !t.alive || !t.connected) { p.lockId = null; return; }
     if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return; }
-    // 队友锁定共享：队友已锁定该目标则直接跟随锁定
+    // 队友锁定共享：队友已锁定该目标则直接跟随锁定（可穿墙）
     if (isTeamMode(this.mode) && this.teammateLocked(p, tid)) { p.lockId = tid; return; }
-    const dx = t.pos.x - p.pos.x, dz = t.pos.z - p.pos.z;
-    if (dx * dx + dz * dz > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return; } // 距离过远
     if (!this.hasLOS(p, t)) { p.lockId = null; return; } // 墙体阻隔
     p.lockId = tid;
   }
@@ -493,15 +490,12 @@ class Game {
     this.sendMe(p);
   }
 
-  // 返回当前有效锁定目标（或 null）；距离过远/墙体阻隔则解锁，队友锁定可保持
+  // 返回当前有效锁定目标（或 null）；墙体阻隔且队友未锁则解锁（无距离限制：全图可锁）
   validLock(p) {
     if (!p.lockId) return null;
     const t = this.players.get(p.lockId);
     if (!t || !t.alive || !t.connected) { p.lockId = null; return null; }
     if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return null; }
-    const dx = t.pos.x - p.pos.x, dz = t.pos.z - p.pos.z;
-    const d2 = dx * dx + dz * dz;
-    if (d2 > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return null; } // 距离过远
     if (!this.hasLOS(p, t) && !(isTeamMode(this.mode) && this.teammateLocked(p, p.lockId))) {
       p.lockId = null; // 墙体阻隔且队友未锁 → 解锁
       return null;

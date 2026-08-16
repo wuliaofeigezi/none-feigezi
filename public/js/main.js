@@ -172,7 +172,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260825 · 机库武器详情栏 · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260826 · 索敌全图可锁（仅墙体+队友未锁失败） · 如加载旧版请强制刷新/清除缓存');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -1000,9 +1000,8 @@ import * as THREE from './three.module.min.js';
     if (socket && socket.connected) socket.emit('lock', { targetId: targetId || null });
   }
 
-  // 索敌：准星附近（屏幕 70px 内）最近的可锁定敌人；未瞄到敌人时保持当前锁定
   // 索敌：准星附近（屏幕 110px 内）最近的可锁定敌人；未瞄到敌人时保持当前锁定；
-  // 每 400ms 重发一次锁定请求（墙体/距离短暂受阻后自动重新获取）
+  // 每 400ms 重发一次锁定请求（墙体短暂受阻后自动重新获取）；无距离限制（全图可锁）
   function updateLockTarget() {
     if (!started || !me || !me.alive || pauseOpen || ctfVoting() || mechSelecting()) {
       if (lockTargetId) { lockTargetId = null; sendLock(null); }
@@ -1020,7 +1019,7 @@ import * as THREE from './three.module.min.js';
       if (v.behind) continue;
       if (Math.hypot(v.x - cx0, v.y - cy0) > 110) continue;
       const d3 = Math.hypot(rp.target.x - myPos.x, rp.target.y - myPos.y, rp.target.z - myPos.z);
-      if (d3 > 60 || d3 >= bestD3) continue;
+      if (d3 >= bestD3) continue;
       bestD3 = d3;
       best = id;
     }
@@ -1037,7 +1036,7 @@ import * as THREE from './three.module.min.js';
     }
   }
 
-  // 锁定框跟随服务端确认的锁定（距离过远/墙阻隔时服务端自动解锁）
+  // 锁定框跟随服务端确认的锁定（墙阻隔且队友未锁时服务端自动解锁；无距离限制）
   function updateLockBox() {
     if (!lockBox || !lockDist) return;
     const tid = me && me.lockId;
