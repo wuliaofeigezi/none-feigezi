@@ -45,7 +45,8 @@ import * as THREE from './three.module.min.js';
     pauseMenu = $('pauseMenu'), pauseContinueBtn = $('pauseContinueBtn'),
     pauseSuicideBtn = $('pauseSuicideBtn'), pauseLeaveBtn = $('pauseLeaveBtn'),
     suicideBar = $('suicideBar'), suicideFill = $('suicideFill'),
-    lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash');
+    lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash'),
+    mechSelect = $('mechSelect'), msButtons = $('msButtons');
 
   // ===== 常量（单一事实来源：public/js/neon-shared.js，禁止在此重复定义） =====
   const NS = window.NeonShared;
@@ -126,6 +127,8 @@ import * as THREE from './three.module.min.js';
     { type: 'humanoid', weapons: ['gau12', 'gau12', 'gau12', 'gau12'] },
     { type: 'spider', weapons: ['gau12', 'gau12', 'gau12'] },
   ];
+  // 出战配置：主战在前（死斗先出主战；其他模式只出主战）
+  function battleMechs() { return primaryIdx === 0 ? mechConfigs : [mechConfigs[1], mechConfigs[0]]; }
   // ===== 武器视觉状态 =====
   let tracerPool = [];           // 机炮曳光
   let beamMeshes = [];           // 激光束
@@ -349,7 +352,8 @@ import * as THREE from './three.module.min.js';
     }).join('');
     roomListEl.querySelectorAll('.room-row').forEach((el) => {
       el.addEventListener('click', () => {
-        socket.emit('room:join', { code: el.dataset.code, name: myName, sessionId: getSessionId() });
+        myName = (lobbyName.value || '玩家').trim().slice(0, 16);
+        socket.emit('room:join', { code: el.dataset.code, name: myName, sessionId: getSessionId(), mechs: battleMechs() });
       });
     });
   }
@@ -443,14 +447,12 @@ import * as THREE from './three.module.min.js';
     setupHangarPreviews();
     if (battleBtn) battleBtn.addEventListener('click', () => {
       myName = (lobbyName.value || '玩家').trim().slice(0, 16);
-      // 主战在前（死斗：先出主战，再出备选；其他模式只出主战）
-      const mechs = primaryIdx === 0 ? mechConfigs : [mechConfigs[1], mechConfigs[0]];
       socket.emit('room:create', {
         name: myName + ' 的房间',
         playerName: myName,
         sessionId: getSessionId(),
         mode: selectedMode,
-        mechs,
+        mechs: battleMechs(),
       });
     });
     // 机库预览独立渲染循环（修复电脑端预览不显示：不再依赖对局内 frame 循环）
@@ -873,12 +875,93 @@ import * as THREE from './three.module.min.js';
     beep(520, 0.08, 'sawtooth', 0.05);
   }
 
+  // ---------- 命中火花（弹着点粒子） ----------
+  let sparkPool = [];
+  function getSpark() {
+    for (const s of sparkPool) if (!s.active) { s.active = true; s.mesh.visible = true; return s; }
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, 0.07, 0.07),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 1 })
+    );
+    const s = { mesh, active: true, life: 0, vx: 0, vy: 0, vz: 0 };
+    scene.add(mesh);
+    sparkPool.push(s);
+    return s;
+  }
+  function spawnSparks(x, y, z, n) {
+    for (let i = 0; i < (n || 4); i++) {
+      const s = getSpark();
+      s.life = 0.3;
+      s.mesh.position.set(x, y, z);
+      s.vx = (Math.random() - 0.5) * 3;
+      s.vy = Math.random() * 3.2;
+      s.vz = (Math.random() - 0.5) * 3;
+    }
+  }
+  function updateSparks(dt) {
+    for (const s of sparkPool) {
+      if (!s.active) continue;
+      s.life -= dt;
+      if (s.life <= 0) { s.active = false; s.mesh.visible = false; continue; }
+      s.mesh.position.x += s.vx * dt;
+      s.mesh.position.y += s.vy * dt;
+      s.mesh.position.z += s.vz * dt;
+      s.mesh.material.opacity = Math.max(0, s.life / 0.3);
+    }
+  }
+
+  // ---------- 观战模式（死斗出局） ----------
+  let spectateId = null;
+  function spectateCamera(dt) {
+    if (!spectateId || !remotePlayers.has(spectateId) || remotePlayers.get(spectateId).alive === false) {
+      spectateId = null;
+      let best = null, bd = Infinity;
+      for (const [id, rp] of remotePlayers) {
+        if (rp.alive === false || !rp.visible) continue;
+        const d = Math.hypot(rp.target.x - myPos.x, rp.target.y - myPos.y, rp.target.z - myPos.z);
+        if (d < bd) { bd = d; best = id; }
+      }
+      spectateId = best;
+    }
+    const rp = spectateId && remotePlayers.get(spectateId);
+    if (!rp) return;
+    const cpc = Math.cos(pitch), spc = Math.sin(pitch);
+    const camPos = new THREE.Vector3(
+      rp.target.x + Math.sin(yaw) * cpc * 6, rp.target.y + 2.6 - spc * 4, rp.target.z + Math.cos(yaw) * cpc * 6
+    );
+    camera.position.lerp(camPos, Math.min(1, 10 * dt));
+    camera.lookAt(rp.target.x, rp.target.y + 1.3, rp.target.z);
+    if (lockBox) lockBox.classList.add('hidden');
+  }
+
+  // ---------- 局内选择机甲（死亡后换机甲再部署） ----------
+  function updateMechSelect(m) {
+    const el = mechSelect, btns = msButtons;
+    if (!el || !btns) return;
+    if (m.alive) { el.classList.add('hidden'); return; }
+    let list = (m.mechChoices || []).slice();
+    if (gameMode === 'duel' && m.mechIndex != null) {
+      list = list.filter((c) => c.index >= m.mechIndex); // 死斗只能选未损毁的
+    }
+    if (list.length <= 1) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    btns.innerHTML = list.map((c) =>
+      '<button class="btn ms-btn" data-i="' + c.index + '">' +
+      (c.type === 'spider' ? '🕷 蜘蛛机器人' : '🤖 人形战斗机器人') + '</button>').join('');
+    btns.querySelectorAll('.ms-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        socket.emit('mech:select', { index: parseInt(b.dataset.i, 10) });
+        el.classList.add('hidden');
+      });
+    });
+  }
+
   // ---------- 武器视觉（曳光/激光束/巡飞弹/爆炸） ----------
   function getTracer() {
     for (const t of tracerPool) if (!t.active) { t.active = true; t.mesh.visible = true; return t; }
     const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.02, 1, 4),
-      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.9 })
+      new THREE.CylinderGeometry(0.035, 0.035, 1, 5),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.95 })
     );
     const t = { mesh, active: true, life: 0 };
     scene.add(mesh);
@@ -903,13 +986,14 @@ import * as THREE from './three.module.min.js';
       t.mesh.scale.set(1, len, 1);
       t.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
       t.mesh.material.color.setHex(s.hit ? 0xffe9a8 : 0x9ffcff);
+      if (s.hit) spawnSparks(s.x2, s.y2, s.z2, 3); // 命中火花
     }
   }
   function getBeamMesh() {
     for (const m of beamMeshes) if (!m.visible) { m.visible = true; return m; }
     const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.05, 0.05, 1, 6),
-      new THREE.MeshBasicMaterial({ color: 0xff5c7a, transparent: true, opacity: 0.85 })
+      new THREE.CylinderGeometry(0.09, 0.09, 1, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff4d6b, transparent: true, opacity: 0.95 })
     );
     mesh.visible = false;
     scene.add(mesh);
@@ -1118,7 +1202,9 @@ import * as THREE from './three.module.min.js';
     me = null;
     if (selfModel) { scene.remove(selfModel); selfModel = null; }
     lockTargetId = null;
+    spectateId = null;
     if (lockBox) lockBox.classList.add('hidden');
+    if (mechSelect) mechSelect.classList.add('hidden');
     if (socket && socket.connected) sendLock(null);
     for (const id of [...remotePlayers.keys()]) removeRemotePlayer(id);
     for (const m of projMeshes) { m.visible = false; }
@@ -1264,13 +1350,11 @@ import * as THREE from './three.module.min.js';
     });
   }
 
-  // 第三人称自机模型（跟随本地预测位置）
+  // 第三人称自机模型（不带武器挂载，避免遮挡视野）
   function buildSelfModel() {
     if (selfModel) { scene.remove(selfModel); selfModel = null; }
     if (!me) return;
     selfModel = buildMechModel(me.mechType, { color: new THREE.Color(me.color) });
-    const mounts = (selfModel.userData && selfModel.userData.mounts) || [];
-    (me.weapons || []).forEach((w, i) => { if (mounts[i]) mountWeaponVisual(mounts[i], w.type); });
     scene.add(selfModel);
     selfLastX = myPos.x; selfLastZ = myPos.z;
   }
@@ -1323,9 +1407,10 @@ import * as THREE from './three.module.min.js';
         showCtfVote({ cards: ctfState.cards, voteEndsAt: ctfState.voteEndsAt });
       }
     }
-    // 远端玩家
+    // 远端玩家（跳过自己：自机由 selfModel 渲染，否则会出现两个重叠模型）
     const seen = new Set();
     for (const sp of payload.players) {
+      if (sp.id === me.id) continue;
       seen.add(sp.id);
       let rp = remotePlayers.get(sp.id);
       if (!rp) rp = createRemotePlayer(sp);
@@ -1355,6 +1440,16 @@ import * as THREE from './three.module.min.js';
         if (sp.id !== me.id) continue;
         me.score = sp.score; me.kills = sp.kills; me.deaths = sp.deaths;
         me.carrying = !!sp.carrying; me.team = sp.team; // 同步旗手状态（本地预测需用它减速）
+        // 每 tick 同步武器状态（装填倒计时实时更新）与模块血量
+        if (sp.weaponState) { me.weapons = sp.weaponState; updateWeaponHud(me); }
+        if (sp.mech) {
+          me.mech = me.mech || {};
+          me.mech.legs = sp.mech.legs; me.mech.chest = sp.mech.chest; me.mech.core = sp.mech.core;
+          me.mech.chestBroken = sp.mech.chestBroken; me.mech.legsDestroyed = sp.mech.legsDestroyed;
+          me.mechType = sp.mechType;
+          updateModuleHud(me);
+        }
+        me.lives = sp.lives; me.mechIndex = sp.mechIndex;
         if (me.alive) {
           serverTarget.set(sp.x, sp.y, sp.z);
           const dx = sp.x - myPos.x, dy = sp.y - myPos.y, dz = sp.z - myPos.z;
@@ -1424,11 +1519,18 @@ import * as THREE from './three.module.min.js';
     if (!m.alive) stopSuicideHold();
     if (m.alive) {
       deathOverlay.classList.add('hidden');
+      updateMechSelect(m);
     } else {
-      deathText.textContent = '你被 ' + (lastKiller || '???') + ' 击杀';
-      respawnIn = m.respawnIn || 3000;
-      respawnAtLocal = performance.now() + respawnIn;
+      if (gameMode === 'duel' && m.lives === 0) {
+        deathText.textContent = '💥 机甲全部损毁，进入观战';
+        respawnText.textContent = '鼠标移动环视战场';
+      } else {
+        deathText.textContent = '你被 ' + (lastKiller || '???') + ' 击杀';
+        respawnIn = m.respawnIn || 3000;
+        respawnAtLocal = performance.now() + respawnIn;
+      }
       deathOverlay.classList.remove('hidden');
+      updateMechSelect(m); // 死亡后可选择下一台机甲
     }
     if (!wasAlive && m.alive) {
       myPos.x = m.x; myPos.y = m.y; myPos.z = m.z;
@@ -1959,42 +2061,50 @@ import * as THREE from './three.module.min.js';
     const py = prevStep.y + (curStep.y - prevStep.y) * alpha;
     const pz = prevStep.z + (curStep.z - prevStep.z) * alpha;
 
-    // ===== 第三人称相机（跟随机甲后方，防穿墙） =====
-    const camDist = 4.8, camHgt = 2.1;
-    const cpc = Math.cos(pitch), spc = Math.sin(pitch);
-    const camPos = collideCamera(
-      px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.7, pz + Math.cos(yaw) * cpc * camDist,
-      px, py + 1.4, pz
-    );
-    camera.position.lerp(camPos, Math.min(1, 12 * dt));
-    if (camShake > 0) {
-      camera.position.x += (Math.random() - 0.5) * camShake * 0.5;
-      camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
-      camShake = Math.max(0, camShake - dt * 10);
-    }
-    camera.lookAt(px - Math.sin(yaw) * 5, py + 1.5 + spc * 5, pz - Math.cos(yaw) * 5);
+    // ===== 相机：第三人称 / 观战 =====
+    const spectating = started && me && !me.alive && gameMode === 'duel' && me.lives === 0;
+    if (spectating) {
+      spectateCamera(dt);
+      if (selfModel) selfModel.visible = false;
+    } else {
+      // 第三人称相机（跟随机甲后方，防穿墙；稍远稍高避免遮挡视野）
+      const camDist = 5.1, camHgt = 2.3;
+      const cpc = Math.cos(pitch), spc = Math.sin(pitch);
+      const camPos = collideCamera(
+        px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.7, pz + Math.cos(yaw) * cpc * camDist,
+        px, py + 1.4, pz
+      );
+      camera.position.lerp(camPos, Math.min(1, 14 * dt));
+      if (camShake > 0) {
+        camera.position.x += (Math.random() - 0.5) * camShake * 0.5;
+        camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
+        camShake = Math.max(0, camShake - dt * 10);
+      }
+      camera.lookAt(px - Math.sin(yaw) * 5, py + 1.5 + spc * 5, pz - Math.cos(yaw) * 5);
 
-    // ===== 自机机甲模型（第三人称可见） =====
-    if (selfModel) {
-      selfModel.position.set(px, py, pz);
-      selfModel.rotation.y = yaw;
-      selfModel.visible = !!me && me.alive !== false;
-      const srp = {
-        group: selfModel,
-        legs: (me && me.mech && me.mech.legs) || [],
-        chestBroken: !!(me && me.mech && me.mech.chestBroken),
-        alive: !!(me && me.alive),
-        climbing: myClimbing,
-        target: { x: px, y: py, z: pz },
-        lastX: selfLastX, lastZ: selfLastZ,
-      };
-      animateMechLegs(srp, dt);
-      selfLastX = px; selfLastZ = pz;
+      // ===== 自机机甲模型（第三人称可见） =====
+      if (selfModel) {
+        selfModel.position.set(px, py, pz);
+        selfModel.rotation.y = yaw;
+        selfModel.visible = me && me.alive !== false;
+        const srp = {
+          group: selfModel,
+          legs: (me && me.mech && me.mech.legs) || [],
+          chestBroken: !!(me && me.mech && me.mech.chestBroken),
+          alive: !!(me && me.alive),
+          climbing: myClimbing,
+          target: { x: px, y: py, z: pz },
+          lastX: selfLastX, lastZ: selfLastZ,
+        };
+        animateMechLegs(srp, dt);
+        selfLastX = px; selfLastZ = pz;
+      }
     }
 
-    // ===== 索敌锁定：准星附近自动锁定并上报，锁定框跟随 =====
-    updateLockTarget();
+    // ===== 索敌锁定（观战时不锁定不上报） =====
+    if (!spectating) updateLockTarget();
     updateLockBox();
+    updateSparks(dt);
 
     const k = 1 - Math.exp(-16 * dt);
     for (const rp of remotePlayers.values()) {
@@ -2028,7 +2138,7 @@ import * as THREE from './three.module.min.js';
       cooldown.classList.add('hidden');
     }
 
-    if (me && !me.alive) {
+    if (me && !me.alive && !(gameMode === 'duel' && me.lives === 0)) {
       const left = Math.max(0, Math.ceil((respawnAtLocal - now) / 1000));
       respawnText.textContent = left + ' 秒后复活';
     }
@@ -2190,11 +2300,12 @@ import * as THREE from './three.module.min.js';
     myName = (lobbyName.value || '玩家').trim().slice(0, 16);
   });
   quickJoinBtn.addEventListener('click', () => {
+    myName = (lobbyName.value || '玩家').trim().slice(0, 16);
     // 优先进等待中的房间，其次可中途加入进行中的房间
     const open = roomList.find((r) => r.state === 'lobby' && !r.hasPassword)
       || roomList.find((r) => !r.hasPassword);
     if (open) {
-      socket.emit('room:join', { code: open.code, name: myName, sessionId: getSessionId() });
+      socket.emit('room:join', { code: open.code, name: myName, sessionId: getSessionId(), mechs: battleMechs() });
     } else {
       showToast('暂无可加入的房间，试试创建一个');
     }

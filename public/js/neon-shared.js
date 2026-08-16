@@ -77,18 +77,18 @@
       rpm: 720, mag: 480, reloadMs: 15000,
       dmg: 1, canReloadWhileFire: false,
     },
-    // 镭射激光：击中后 10 秒内每秒 5 伤害，满装填 30s，可边打边装填
+    // 镭射激光：击中后 10 秒内每秒 15 伤害（×3），满装填 30s，可边打边装填
     laser: {
       name: '镭射激光', type: 'laser',
-      dmgPerSec: 5, burnMs: 10000,
+      dmgPerSec: 15, burnMs: 10000,
       chargeFullMs: 30000, maxBeamMs: 10000,
       canReloadWhileFire: true,
     },
-    // 巡飞弹：弹夹 5 发一次性全部打出，装填 20s，有散布，可越地形，每发命中模块 20 伤害
+    // 巡飞弹：弹夹 5 发一次性全部打出，装填 20s，追踪锁定目标，每发命中模块 20 伤害
     loiter: {
       name: '巡飞弹', type: 'loiter',
       mag: 5, volley: 5, reloadMs: 20000, dmg: 20,
-      spread: 0.12, speed: 26, arcHeight: 16, blastRadius: 2.5,
+      spread: 0.07, speed: 26, arcHeight: 16, blastRadius: 3.2,
     },
   };
   const DEFAULT_WEAPON = 'gau12';

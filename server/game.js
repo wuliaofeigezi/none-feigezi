@@ -227,6 +227,7 @@ class Game {
       socket.removeListener('ping', socket._naGame.ping);
       socket.removeListener('suicide', socket._naGame.suicide);
       socket.removeListener('lock', socket._naGame.lock);
+      socket.removeListener('mech:select', socket._naGame.mechSelect);
       socket.removeListener('disconnect', socket._naGame.disconnect);
     }
     const h = {
@@ -235,6 +236,7 @@ class Game {
       ping: (cb) => { if (typeof cb === 'function') cb(Date.now()); },
       suicide: () => this.onSuicide(p.id),
       lock: (d) => this.onLock(p.id, d),
+      mechSelect: (d) => this.onMechSelect(p.id, d),
       disconnect: () => this.onLeave(p.id),
     };
     socket._naGame = h;
@@ -416,9 +418,24 @@ class Game {
     p.lockId = tid;
   }
 
+  // 局内选择下一台机甲（死亡后可换机甲再部署）
+  // 死斗：只能选尚未使用的机甲（index >= mechIndex）；其他模式：可在机库机甲间任意切换
+  onMechSelect(playerId, data) {
+    const p = this.players.get(playerId);
+    if (!this.active || !p || !p.connected || !data) return;
+    const idx = parseInt(data.index, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= p.mechs.length) return;
+    if (this.mode === 'duel' && idx < p.mechIndex) return; // 已损毁的机甲不可再选
+    if (p.alive) return; // 仅死亡等待复活时可换机甲
+    p.mechIndex = idx;
+    if (this.mode === 'duel') p.lives = Math.max(0, p.mechs.length - p.mechIndex);
+    p.respawnAt = Date.now(); // 立即以所选机甲复活
+    this.sendMe(p);
+    console.log(`[neon-arena][${this.roomId}] [mech] ${p.name} 选择机甲 ${p.mechIndex}（${p.mechs[idx].type}）`);
+  }
+
   // 返回当前有效锁定目标（或 null）
-  validLock(p) {
-    if (!p.lockId) return null;
+  validLock(p) {    if (!p.lockId) return null;
     const t = this.players.get(p.lockId);
     if (!t || !t.alive || !t.connected) { p.lockId = null; return null; }
     if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return null; }
@@ -868,11 +885,12 @@ class Game {
       const tx = gx + Math.cos(ang) * rad;
       const tz = gz + Math.sin(ang) * rad;
       const dist = Math.hypot(tx - origin.x, tz - origin.z);
-      const dur = Math.max(1.0, dist / (w.speed * (this.cfg.loiterSpeedMul || 1)));
+      const dur = Math.max(0.9, dist / (w.speed * (this.cfg.loiterSpeedMul || 1)));
       this.projectiles.push({
         kind: 'loiter', owner: p.id,
         x0: origin.x, y0: origin.y, z0: origin.z,
         tx, tz, arcH: w.arcHeight,
+        lockedId: locked ? locked.id : null, // 追踪锁定目标
         t: 0, dur,
         x: origin.x, y: origin.y, z: origin.z,
       });
@@ -886,6 +904,18 @@ class Game {
     for (const pr of this.projectiles) {
       if (pr.kind !== 'loiter') continue;
       pr.t += dt;
+      // 弹道追踪：锁定目标存活则持续修正落点（小幅强导）
+      if (pr.lockedId) {
+        const tgt = this.players.get(pr.lockedId);
+        if (tgt && tgt.alive && tgt.connected) {
+          const kk = Math.min(1, pr.t / pr.dur);
+          const blend = 1 - kk; // 前期修正强，末端收敛
+          pr.tx += (tgt.pos.x - pr.tx) * blend * 0.35;
+          pr.tz += (tgt.pos.z - pr.tz) * blend * 0.35;
+        } else {
+          pr.lockedId = null;
+        }
+      }
       const k = Math.min(1, pr.t / pr.dur);
       pr.x = pr.x0 + (pr.tx - pr.x0) * k;
       pr.z = pr.z0 + (pr.tz - pr.z0) * k;
@@ -1190,6 +1220,22 @@ class Game {
   }
 
   // ---------- broadcast ----------
+  weaponStateToJSON(p, now) {
+    return p.weaponState.map((ws) => {
+      const def = WEAPONS[ws.type];
+      return {
+        type: ws.type,
+        ammo: (ws.ammo !== undefined) ? ws.ammo : null,
+        reloading: !!ws.reloading,
+        reloadLeft: ws.reloading ? Math.max(0, Math.ceil((ws.reloadEndsAt - now) / 100) / 10) : 0,
+        reloadPct: ws.reloading
+          ? clamp(1 - (ws.reloadEndsAt - now) / def.reloadMs, 0, 1)
+          : (ws.ammo !== undefined ? ws.ammo / def.mag : 1),
+        charge: (ws.charge !== undefined) ? ws.charge : 1,
+      };
+    });
+  }
+
   pubMe(p) {
     const now = Date.now();
     return {
@@ -1202,18 +1248,10 @@ class Game {
         legs: p.mech.legs, chest: p.mech.chest, chestMax: p.mech.chestMax, core: p.mech.core,
         chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
       },
-      weapons: p.weaponState.map((ws) => ({
-        type: ws.type,
-        ammo: (ws.ammo !== undefined) ? ws.ammo : null,
-        reloading: !!ws.reloading,
-        reloadLeft: ws.reloading ? Math.max(0, Math.ceil((ws.reloadEndsAt - now) / 100) / 10) : 0,
-        reloadPct: ws.reloading
-          ? clamp(1 - (ws.reloadEndsAt - now) / WEAPONS[ws.type].reloadMs, 0, 1)
-          : (ws.ammo !== undefined ? ws.ammo / WEAPONS[ws.type].mag : 1),
-        charge: (ws.charge !== undefined) ? ws.charge : 1,
-      })),
+      weapons: this.weaponStateToJSON(p, now),
       lives: this.mode === 'duel' ? p.lives : null,
       mechIndex: this.mode === 'duel' ? p.mechIndex : null,
+      mechChoices: p.mechs.map((m, i) => ({ type: m.type, index: i })),
       score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
       alive: p.alive, respawnIn: Math.max(0, p.respawnAt - now),
     };
@@ -1233,6 +1271,7 @@ class Game {
         x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw,
         mechType: p.mechType,
         weapons: p.weapons,
+        weaponState: this.weaponStateToJSON(p, now),
         climbing: !!p.climbing,
         mech: {
           legs: p.mech.legs, chest: p.mech.chest, core: p.mech.core,

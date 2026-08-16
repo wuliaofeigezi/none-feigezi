@@ -240,6 +240,20 @@ const lockSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
 console.log('索敌命中后模块总血量:', lockSum1, '<', lockSum0);
 assert(lockSum1 < lockSum0, '锁定时应命中锁定目标（即使未瞄向目标）');
 
+// ---- 14.7 局内换机甲：死亡后选择第二台机甲再部署 ----
+pA.mechs = [{ type: 'humanoid', weapons: [] }, { type: 'spider', weapons: [] }];
+pA.mechIndex = 0;
+game.damageModule(pA, MODULE_CORE, 9999, 'B', Date.now());
+assert(!pA.alive, 'A 应死亡');
+game.onMechSelect('A', { index: 1 }); // 选择蜘蛛
+game.tick(); // 到点复活
+assert(pA.alive && pA.mechType === 'spider' && pA.mech.legs.length === 6, '应换成蜘蛛满血复活');
+// 存活状态不可换机甲
+game.damageModule(pA, MODULE_CORE, 9999, 'B', Date.now());
+const typeBefore = pA.mechType;
+game.onMechSelect('A', { index: 0 });
+assert(pA.mechType === typeBefore, '存活状态不应允许换机甲');
+
 // ---- 15. 死斗模式：两次生命 + 基地核心判定 ----
 const D = fakeSocket('D');
 const E = fakeSocket('E');
