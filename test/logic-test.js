@@ -73,12 +73,33 @@ game.tick();
 console.log('移动后位置:', pA.pos.x.toFixed(2), pA.pos.y.toFixed(2), pA.pos.z.toFixed(2), 'yaw:', pA.yaw.toFixed(2), 'vel.z:', pA.vel.z.toFixed(2));
 assert(pA.pos.z < 14 && pA.pos.x === 0 && pA.pos.y === 0, 'yaw=0 前进应沿 -z 且贴地');
 
-// ---- 2. 跳跃已禁用（所有机甲不可手动跳跃） ----
+// ---- 2. 泰坦跳跃技能：人形机甲可跳越部分墙体（冷却 2.5s）；蜘蛛无跳跃（保留爬墙） ----
 place(pA, 0, 14);
 input(A, { jump: true });
 game.tick();
+console.log('泰坦跳跃后 vel.y:', pA.vel.y.toFixed(2));
+assert(pA.vel.y > 10, '泰坦按下跳跃应获得向上速度');
+// 冷却期内再次跳跃不应触发
+pA.pos.y = 0; pA.vel.y = 0; pA.grounded = true;
+game.tick(); // 落地
+const velAfter1 = pA.vel.y;
+input(A, { jump: true });
 game.tick();
-assert(pA.vel.y <= 0 && pA.pos.y <= 0.01, '跳跃已禁用，不应跳起');
+assert(pA.vel.y <= 0.01, '冷却期内不应再次起跳');
+input(A, { jump: false });
+// 蜘蛛无跳跃
+place(pB, 0, 14);
+pB.mechType = 'spider';
+input(B, { jump: true });
+game.tick();
+game.tick();
+assert(pB.vel.y <= 0 && pB.pos.y <= 0.01, '蜘蛛不应跳跃（保留爬墙）');
+input(B, { jump: false });
+// 恢复默认人形，避免影响后续测试
+pB.mechType = 'humanoid';
+pB.mech.legs = [100, 100];
+pB.legsDestroyed = 0;
+void velAfter1;
 
 // ---- 3. 跳跳台 ----
 place(pA, MAP.jumpPads[0].x, MAP.jumpPads[0].z);
@@ -132,6 +153,34 @@ let g1 = 0;
 while (!pB.alive && g1++ < 100) game.tick();
 assert(pB.alive, '应复活');
 assert(pB.mech.chest === pB.mech.chestMax && pB.mech.legs.every((h) => h === 100), '复活应满模块');
+
+// ---- 8b. 助攻结算：A2 先打伤 B2，C2 击杀 → A2 得助攻 ----
+const A2 = fakeSocket('A2');
+const B2 = fakeSocket('B2');
+const C2 = fakeSocket('C2');
+const io2 = {
+  sockets: { sockets },
+  to() { return { emit(ev, data) { emitted.push([ev, data]); } }; },
+  emit() {}, on() {},
+};
+const game2 = new Game(io2, 'room_assist', { mode: 'ffa', maxPlayers: 16, matchMinutes: 5 }, {});
+game2.start([
+  { socketId: 'A2', name: 'Alice', sessionId: 'sid_a2' },
+  { socketId: 'B2', name: 'Bob', sessionId: 'sid_b2' },
+  { socketId: 'C2', name: 'Carol', sessionId: 'sid_c2' },
+]);
+clearInterval(game2.timer);
+game2.timer = null;
+game2.onMechSelect('A2', { index: 0 });
+game2.onMechSelect('B2', { index: 0 });
+game2.onMechSelect('C2', { index: 0 });
+const a2 = game2.players.get('A2');
+const b2 = game2.players.get('B2');
+const c2 = game2.players.get('C2');
+game2.damageModule(b2, MODULE_CHEST, 30, 'A2', Date.now()); // A2 打伤 B2
+game2.damageModule(b2, MODULE_CORE, 9999, 'C2', Date.now()); // C2 击杀
+assert(a2.assists === 1, 'A2 造成伤害后应获助攻（实际 ' + a2.assists + '）');
+assert(c2.kills === 1, 'C2 应计击杀');
 
 // ---- 9. 边界 ----
 place(pA, 200, 0);
@@ -301,7 +350,7 @@ const aimSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
 console.log('准星瞄准命中后模块总血量:', aimSum1, '<', aimSum0);
 assert(aimSum1 < aimSum0, '未索敌时子弹应朝准星瞄准点开火');
 
-// ---- 15. 死斗模式（大局计分制）：回合制，先赢 2 回合获胜 ----
+// ---- 15. 死斗模式（大局计分制）：回合制，先赢 13 回合获胜（CS 式） ----
 const D = fakeSocket('D');
 const E = fakeSocket('E');
 const duelGame = new Game(io, 'room_duel', { mode: 'duel', maxPlayers: 8, matchMinutes: 5 }, {});
@@ -328,21 +377,25 @@ duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
 assert(!pD.alive && pD.usedMechs.size === 2 && pD.lives === 0, '两次死亡后应出局');
 duelGame.tick();
 assert(duelGame.duel.phase === 'roundOver' && duelGame.duel.roundWins[pE.team] === 1, 'E 队应赢得第 1 回合');
-// 第 2 回合：重置后再次全灭 D → E 队赢下大局
-duelGame.duel.roundOverAt = Date.now();
-duelGame.tick(); // 进入第 2 回合（重置）
-assert(duelGame.duel.round === 2 && duelGame.duel.phase === 'play', '应开始第 2 回合');
-assert(pD.usedMechs.size === 0 && pD.lives === 2, '回合开始应重置机甲');
-duelGame.tick(); // 全员复活
-assert(pD.alive, '第 2 回合应复活');
-duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
-pD.respawnAt = Date.now();
-duelGame.tick();
-duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
-duelGame.tick();
-assert(duelGame.duel.roundWins[pE.team] === 2 && duelGame.duel.winnerTeam === pE.team, 'E 队应赢下大局（2:0）');
+// 后续回合：连续全灭 D → E 队赢下大局（先 13 回合）
+let roundsWon = 1;
+while (duelGame.duel.winnerTeam === null && roundsWon < 13) {
+  duelGame.duel.roundOverAt = Date.now();
+  duelGame.tick(); // 进入下一回合（重置）
+  assert(duelGame.duel.phase === 'play', '应开始新回合');
+  duelGame.tick(); // 全员复活
+  assert(pD.alive, '新回合应复活');
+  duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
+  pD.respawnAt = Date.now();
+  duelGame.tick();
+  duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
+  duelGame.tick();
+  roundsWon++;
+}
+assert(roundsWon === 13, '应需赢满 13 回合才结束大局');
+assert(duelGame.duel.roundWins[pE.team] === 13 && duelGame.duel.winnerTeam === pE.team, 'E 队应赢下大局（13:0）');
 const overEvt = emitted.find(([ev, d]) => ev === 'game:over' && d && d.mode === 'duel');
-assert(overEvt && overEvt[1].duel && overEvt[1].duel.roundWins && overEvt[1].duel.roundWins[pE.team] === 2, 'game:over 应携带大局比分');
+assert(overEvt && overEvt[1].duel && overEvt[1].duel.roundWins && overEvt[1].duel.roundWins[pE.team] === 13, 'game:over 应携带大局比分');
 
 // ---- 16. 断线重连恢复（Game 层）：同 sessionId 恢复原玩家，并返回旧 socketId ----
 game.onLeave('A');

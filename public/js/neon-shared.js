@@ -49,11 +49,13 @@
 
   const MECHS = {
     // 人形「泰坦」：双腿 + 胸部 + 藏于胸部的核心，肩部 4 战斗模块槽（上下分布）
+    // 专属技能：跳跃（可越过部分墙体/低掩体），跳跃后需冷却
     humanoid: {
       name: '泰坦',
       legs: 2, legHp: 100, chestHp: 250, coreHp: 100,
       mounts: 4,
       moveMul: 0.5, // 重型机甲：移速减半（翻倍后）
+      canJump: true, jumpVel: 16.5, jumpCooldownMs: 2500, // 跳跃技能：初速 16.5（约 5.6m 高），冷却 2.5s
       // 各武器槽枪口位置（本地坐标，绕 yaw 旋转后为世界位置）
       muzzlePos: [
         { x: -0.72, y: 1.68, z: 0.14 }, // 左上（落于肩膀上）
@@ -99,10 +101,10 @@
       chargeFullMs: 30000, maxBeamMs: 10000,
       canReloadWhileFire: true,
     },
-    // “蜂群”巡飞弹：弹夹 5 发一次性全部打出，装填 20s，追踪锁定目标，每发命中模块 20 伤害
+    // “蜂群”巡飞弹：弹夹 5 发一次性全部打出，装填 15s，追踪锁定目标，每发命中模块 20 伤害
     loiter: {
       name: '蜂群', type: 'loiter',
-      mag: 5, volley: 5, reloadMs: 20000, dmg: 20,
+      mag: 5, volley: 5, reloadMs: 15000, dmg: 20,
       spread: 0.07, speed: 26, arcHeight: 16, blastRadius: 3.2,
     },
   };

@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260826"/>
+<link rel="stylesheet" href="css/style.css?v=20260827"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -130,7 +130,23 @@
   .ta-group.blue{border-color:#2f4a9b;}
   .ta-icon{font-size:15px;filter:drop-shadow(0 0 3px rgba(125,249,255,.6));}
   .ta-icon.dead{filter:grayscale(1) brightness(.35);opacity:.45;}
-  .ta-vs{font-size:12px;font-weight:700;color:#ffe9a8;background:rgba(10,13,30,.72);border:1px solid #b98a1f;border-radius:10px;padding:4px 10px;white-space:nowrap;}
+  .ta-vs{font-size:14px;font-weight:800;color:#ffe9a8;background:rgba(10,13,30,.82);border:1px solid #b98a1f;border-radius:10px;padding:5px 14px;white-space:nowrap;letter-spacing:1px;}
+  .ta-team{font-size:11px;font-weight:700;}
+  .ta-team.red-t{color:#ff6b8a;}
+  .ta-team.blue-t{color:#6ba8ff;}
+  .ta-round{display:block;font-size:9px;color:#9fb3e8;font-weight:600;letter-spacing:0;margin-top:1px;}
+
+  /* ===== Tab KDA 计分板 ===== */
+  #kdaOverlay{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(520px,92vw);background:rgba(6,10,26,.93);border:1px solid #2b3a7a;border-radius:12px;padding:12px 14px;pointer-events:none;z-index:8;box-shadow:0 0 24px rgba(34,211,238,.25);}
+  #kdaOverlay h3{font-size:13px;color:#7dd3fc;margin:0 0 8px;text-align:center;letter-spacing:2px;}
+  .kda-head,.kda-row{display:grid;grid-template-columns:1fr 60px 60px 60px;gap:6px;align-items:center;font-size:12px;padding:3px 8px;border-radius:6px;}
+  .kda-head{color:#8fa3d8;font-size:10px;letter-spacing:1px;border-bottom:1px solid #2b3a7a;margin-bottom:4px;}
+  .kda-row{color:#cfe0ff;}
+  .kda-row:nth-child(odd){background:rgba(255,255,255,.04);}
+  .kda-row.me{background:rgba(125,249,255,.14);color:#fff;}
+  .kda-row .k{color:#7df9ff;text-align:center;}
+  .kda-row .d{color:#ff6b8a;text-align:center;}
+  .kda-row .a{color:#ffd98a;text-align:center;}
 
   /* ===== 机甲模块 HUD ===== */
   #moduleHud{position:absolute;left:14px;bottom:90px;width:210px;background:rgba(5,10,25,.72);border:1px solid rgba(125,249,255,.3);border-radius:10px;padding:8px 10px;pointer-events:none;}
@@ -254,11 +270,22 @@
     <div id="respawnText"></div>
   </div>
   <div id="lookHint" class="hidden"></div>
-  <!-- 顶部每方存活人数（熄灭=无法复活）+ 死斗大局比分 -->
+  <!-- 顶部每方存活人数（熄灭=无法复活）+ 死斗 CS 式比分板 -->
   <div id="teamAlive" class="hidden">
     <div class="ta-group red" id="taRed"></div>
-    <div class="ta-vs">大局 <span id="taScore">0 : 0</span></div>
+    <div class="ta-vs">
+      <span class="ta-team red-t">🔴 红</span>
+      <span id="taScore">0 : 0</span>
+      <span class="ta-team blue-t">蓝 🔵</span>
+      <span class="ta-round" id="taRound"></span>
+    </div>
     <div class="ta-group blue" id="taBlue"></div>
+  </div>
+  <!-- Tab 查看 KDA 计分板（按 Tab 显示，松开隐藏） -->
+  <div id="kdaOverlay" class="hidden">
+    <h3>📊 战绩 KDA</h3>
+    <div class="kda-head"><span>玩家</span><span>击杀</span><span>死亡</span><span>助攻</span></div>
+    <div id="kdaList"></div>
   </div>
   <div id="touchUI" class="hidden">
     <div id="joyBase"><div id="joyKnob"></div></div>
@@ -426,8 +453,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260826"></script>
-<script src="js/neon-shared.js?v=20260826"></script>
-<script type="module" src="js/main.js?v=20260826"></script>
+<script src="js/socket.io.min.js?v=20260827"></script>
+<script src="js/neon-shared.js?v=20260827"></script>
+<script type="module" src="js/main.js?v=20260827"></script>
 </body>
 </html>

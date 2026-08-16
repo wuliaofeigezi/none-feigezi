@@ -1,11 +1,26 @@
 'use strict';
 // 霓虹竞技场 Neon Arena — 地图定义（Y 轴向上，box 为中心坐标 + 尺寸）
-// 精细化地图：高围墙（14m）、中央高台、四角高塔、纵向分隔高墙、低掩体、二层平台
+// 第一张地图「霓虹都市」：箱庭结构（可进入楼房 + 街巷），高围墙(14m)、中央高台、纵向分隔高墙、低掩体
 const MAP = {
-  name: 'Neon Arena',
+  name: '霓虹都市',
   size: { x: 90, z: 90 }, // 可活动范围 -45..45
   wallHeight: 14,         // 外圈围墙高度（蜘蛛可攀爬）
-  // 静态障碍物 {x,y,z,sx,sy,sz}
+  theme: 'city',          // 城市主题（客户端贴图/背景）
+
+  // 可进入楼房（客户端渲染为贴图建筑；墙+门洞生成碰撞盒加入 boxes）
+  // doorSide: north/south/east/west 开门的方位（避开出生点/测试走廊）
+  buildings: [
+    { x: -16, z: 24, w: 10, d: 8, h: 6, doorSide: 'south', color: 0x3a5a9a },
+    { x: 16, z: 28, w: 10, d: 8, h: 6, doorSide: 'north', color: 0x9a5a3a },
+    { x: -16, z: -30, w: 10, d: 8, h: 6, doorSide: 'east', color: 0x3a9a7a },
+    { x: 16, z: -30, w: 10, d: 8, h: 6, doorSide: 'west', color: 0x7a3a9a },
+    { x: 0, z: -34, w: 12, d: 7, h: 7, doorSide: 'south', color: 0x5a5a9a },
+    { x: 0, z: 34, w: 12, d: 7, h: 7, doorSide: 'north', color: 0x9a9a5a },
+    { x: -36, z: 0, w: 6, d: 12, h: 8, doorSide: 'east', color: 0x4a7a7a },
+    { x: 36, z: 0, w: 6, d: 12, h: 8, doorSide: 'west', color: 0x7a4a7a },
+  ],
+
+  // 静态障碍物 {x,y,z,sx,sy,sz}（buildings 的墙也会追加进来）
   boxes: [
     // ---- 中央区域 ----
     // 中央高台（制高点）
@@ -118,5 +133,38 @@ const MAP = {
   // 血包刷新点（已移除血包系统）
   pickups: [],
 };
+
+// 由楼房生成墙体碰撞盒：每栋楼四面薄墙，门的一侧留门洞（墙厚 0.5，门宽 2.6）
+// 生成结果带 building 标记，追加进 boxes 供服务器碰撞 / 客户端渲染跳过（楼房单独绘制贴图）
+(function genBuildingWalls() {
+  const T = 0.5;            // 墙厚
+  const DOOR_W = 2.6;       // 门洞宽
+  MAP.buildings.forEach((b, bi) => {
+    const x0 = b.x - b.w / 2, x1 = b.x + b.w / 2;
+    const z0 = b.z - b.d / 2, z1 = b.z + b.d / 2;
+    const y = b.h / 2;
+    const push = (bx, bz, sx, sz) => MAP.boxes.push({ x: bx, y, z: bz, sx, sy: b.h, sz, building: bi });
+    // 北墙（z0）
+    if (b.doorSide === 'north') {
+      const l = (b.w - DOOR_W) / 2;
+      if (l > 0.1) { push(x0 + l / 2, z0, l, T); push(x1 - l / 2, z0, l, T); }
+    } else push(b.x, z0, b.w, T);
+    // 南墙（z1）
+    if (b.doorSide === 'south') {
+      const l = (b.w - DOOR_W) / 2;
+      if (l > 0.1) { push(x0 + l / 2, z1, l, T); push(x1 - l / 2, z1, l, T); }
+    } else push(b.x, z1, b.w, T);
+    // 西墙（x0）
+    if (b.doorSide === 'west') {
+      const l = (b.d - DOOR_W) / 2;
+      if (l > 0.1) { push(x0, z0 + l / 2, T, l); push(x0, z1 - l / 2, T, l); }
+    } else push(x0, b.z, T, b.d);
+    // 东墙（x1）
+    if (b.doorSide === 'east') {
+      const l = (b.d - DOOR_W) / 2;
+      if (l > 0.1) { push(x1, z0 + l / 2, T, l); push(x1, z1 - l / 2, T, l); }
+    } else push(x1, b.z, T, b.d);
+  });
+})();
 
 module.exports = { MAP };

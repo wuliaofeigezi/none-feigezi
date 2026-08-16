@@ -60,7 +60,7 @@ const DUEL_BASES = [
 const DUEL_CORE_RADIUS = 4.5;    // 核心判定半径
 const DUEL_DEPLOY_SEC = 10;      // 部署装置所需秒数
 const DUEL_ROUND_MS = 90 * 1000; // 每回合时长上限（到时按击杀数判定）
-const DUEL_ROUND_WINS = 2;       // 大局计分：先赢 2 回合获胜
+const DUEL_ROUND_WINS = 13;      // 大局计分：CS 式先赢 13 回合获胜
 
 // 武器索敌（锁定）：无距离限制（全图可锁），仅墙体阻隔 + 队友未锁时失败
 
@@ -299,6 +299,8 @@ class Game {
       score: 0,
       kills: 0,
       deaths: 0,
+      assists: 0,        // 助攻（Tab KDA）
+      recentHits: new Map(), // 助攻追踪：victimId 近期伤害来源
       alive: false,      // 开局先选择机甲（局内选择），选定后才出生
       respawnAt: 0,
       respawnIn: 0,
@@ -509,6 +511,23 @@ class Game {
     for (const h of t.mech.legs) if (h > 0) aliveLegs++;
     const part = (aliveLegs > 0 && Math.random() < 0.5) ? MODULE_LEG : MODULE_CHEST;
     return { part, legIndex: part === MODULE_LEG ? this.randomAliveLeg(t) : null };
+  }
+
+  // 准星模块判定：按射手瞄准射线落在目标上的高度决定打腿还是打胸
+  // （准星对准目标腿部 → 弹道命中腿部模块；对准胸部 → 命中胸部）
+  aimModulePart(shooter, target) {
+    const cfg = MECHS[target.mechType] || MECHS[DEFAULT_MECH];
+    if (!shooter.aim) return this.lockedModule(target);
+    const ox = shooter.pos.x, oy = shooter.pos.y + EYE_H, oz = shooter.pos.z;
+    const ax = shooter.aim.x - ox, ay = shooter.aim.y - oy, az = shooter.aim.z - oz;
+    const al = Math.hypot(ax, ay, az) || 1;
+    const dx = ax / al, dy = ay / al, dz = az / al;
+    const horiz = Math.hypot(dx, dz) || 1;
+    const tHoriz = Math.hypot(target.pos.x - ox, target.pos.z - oz);
+    const yAt = oy + dy * (tHoriz / horiz);
+    const relY = yAt - target.pos.y;
+    if (relY <= cfg.legHeight) return { part: MODULE_LEG, legIndex: this.randomAliveLeg(target) };
+    return { part: MODULE_CHEST, legIndex: null };
   }
 
   // ---------- CTF：卡牌投票 ----------
@@ -898,8 +917,11 @@ class Game {
       const locked = this.validLock(p);
       let dx, dy, dz;
       if (locked) {
-        // 索敌锁定：弹道直接指向锁定目标（即使玩家瞄向别处）
-        const tx = locked.pos.x - origin.x, ty = (locked.pos.y + 0.9) - origin.y, tz = locked.pos.z - origin.z;
+        // 索敌锁定：弹道指向锁定目标的准星对应模块（腿/胸），即使玩家瞄向别处
+        const lm = this.aimModulePart(p, locked);
+        const cfg = MECHS[locked.mechType] || MECHS[DEFAULT_MECH];
+        const aimY = locked.pos.y + (lm.part === MODULE_LEG ? cfg.legHeight * 0.5 : cfg.chestHeight * 0.72);
+        const tx = locked.pos.x - origin.x, ty = aimY - origin.y, tz = locked.pos.z - origin.z;
         const tl = Math.hypot(tx, ty, tz) || 1;
         dx = tx / tl; dy = ty / tl; dz = tz / tl;
       } else if (p.aim) {
@@ -942,7 +964,7 @@ class Game {
     const locked = this.validLock(p);
     let hit = null;
     if (locked) {
-      const lm = this.lockedModule(locked);
+      const lm = this.aimModulePart(p, locked);
       hit = {
         point: { x: locked.pos.x, y: locked.pos.y + 0.9, z: locked.pos.z },
         player: locked, part: lm.part, legIndex: lm.legIndex,
@@ -1059,7 +1081,7 @@ class Game {
         pr.y = pr.y0 + pr.arcH * 4 * k * (1 - k); // 抛物线弧线，越过高地形
         if (k >= 1) {
           this.explodeLoiter(pr, now);
-          this.explosions.push({ x: pr.x, y: pr.y, z: pr.z });
+          this.explosions.push({ x: pr.x, y: pr.y, z: pr.z, owner: pr.owner, kind: 'loiter' });
           continue;
         }
         next.push(pr);
@@ -1153,8 +1175,14 @@ class Game {
 
   // ---------- 模块伤害与死亡 ----------
   // part: leg | chest | core；legIdx 可选（不传则随机存活腿）
+  // 助攻：记录 10 秒内对目标造成过伤害的射手（击杀时结算）
   damageModule(victim, part, dmg, killerId, now, legIdx) {
     if (!victim || !victim.alive || !victim.connected || dmg <= 0) return false;
+    // 助攻追踪：10 秒内对目标造成过伤害的玩家（排除自己）
+    if (killerId && killerId !== victim.id) {
+      if (!victim.recentHits) victim.recentHits = new Map();
+      victim.recentHits.set(killerId, now);
+    }
     // 命中反馈（限流，避免每 tick 数十条）
     if (this.hits.length < 40) {
       this.hits.push({ shooterId: killerId, victimId: victim.id, part, dmg: Math.round(dmg * 100) / 100 });
@@ -1214,6 +1242,18 @@ class Game {
         this.duel.roundKills[killer.team]++; // 大局计分：本回合击杀
       }
       this.sendMe(killer);
+    }
+    // 助攻结算：10 秒内对目标造成过伤害的其他玩家（排除击杀者）
+    if (victim.recentHits) {
+      for (const [aid, ts] of victim.recentHits) {
+        if (aid === killerId || now - ts > 10000) continue;
+        const ap = this.players.get(aid);
+        if (!ap || !ap.connected) continue;
+        if (isTeamMode(this.mode) && ap.team === victim.team) continue; // 同队伤害不算助攻
+        ap.assists = (ap.assists || 0) + 1;
+        this.sendMe(ap);
+      }
+      victim.recentHits.clear();
     }
     this.clearLocksOn(victim.id);
     victim.lockId = null;
@@ -1306,6 +1346,16 @@ class Game {
     if (p.pos.y <= 0 && p.vel.y <= 0) {
       p.pos.y = 0; p.vel.y = 0; p.grounded = true;
     }
+
+    // 泰坦跳跃技能：可跳越部分墙体/低掩体；跳跃后需冷却（蜘蛛无跳跃，保留爬墙）
+    // 受「弹跳」卡加成（cfg.jumpVel / JUMP_VEL 为卡牌倍率）；旗手跳跃 -35%
+    const mechCfg = MECHS[p.mechType] || MECHS[DEFAULT_MECH];
+    if (mechCfg.canJump && p.grounded && p.input.jump && (Date.now() - (p.lastJumpAt || 0)) >= mechCfg.jumpCooldownMs) {
+      const carrierMul = (this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_JUMP_MUL : 1;
+      p.vel.y = mechCfg.jumpVel * (this.cfg.jumpVel / JUMP_VEL) * carrierMul;
+      p.lastJumpAt = Date.now();
+    }
+
     const half = MAP.size.x / 2 - PLAYER_R;
     p.pos.x = clamp(p.pos.x, -half, half);
     p.pos.z = clamp(p.pos.z, -half, half);
@@ -1316,7 +1366,6 @@ class Game {
         p.vel.y = pad.strength;
       }
     }
-    // 已禁用跳跃：所有机甲不可手动跳跃（跳跳台弹射保留）
   }
 
   checkPickups(p, now) {
@@ -1457,7 +1506,7 @@ class Game {
       lockId: p.lockId,
       mechChoices: p.mechs.map((m, i) => ({ type: m.type, index: i, weapons: m.weapons.slice() }))
         .filter((c) => !(this.mode === 'duel' && p.usedMechs && p.usedMechs.has(c.index))),
-      score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
+      score: Math.floor(p.score), kills: p.kills, deaths: p.deaths, assists: p.assists || 0,
       alive: p.alive, respawnIn: Math.max(0, p.respawnAt - now),
     };
   }
@@ -1486,6 +1535,7 @@ class Game {
         lives: this.mode === 'duel' ? p.lives : null,
         mechIndex: this.mode === 'duel' ? p.mechIndex : null,
         alive: p.alive, connected: p.connected, kills: p.kills, deaths: p.deaths, score: p.score,
+        assists: p.assists || 0,
       });
     }
     const projs = this.projectiles.map((pr) => ({ kind: pr.kind, x: pr.x, y: pr.y, z: pr.z, owner: pr.owner }));

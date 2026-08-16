@@ -153,7 +153,14 @@ import * as THREE from './three.module.min.js';
     if (!AUDIO.sfxOn || !AUDIO.ctx) return;
     const t = AUDIO.ctx.currentTime;
     noiseAt(t, 0.4, 0.06, 'lowpass', 900);
-    tone(300, 0.35, 'sawtooth', 0.03, 1400, 1200); // 升调哨声
+    tone(300, 0.35, 'sawtooth', 0.03, 1400, 1200); // 升调哨声（发射）
+  }
+  function sfxLoiterHit() {
+    if (!AUDIO.sfxOn || !AUDIO.ctx) return;
+    const t = AUDIO.ctx.currentTime;
+    noiseAt(t, 0.6, 0.16, 'lowpass', 500);          // 爆炸轰鸣
+    tone(120, 0.35, 'square', 0.05, 60);            // 低频冲击
+    tone(900, 0.12, 'triangle', 0.03, 400);         // 弹片哨声（命中）
   }
   function sfxExplosion() {
     if (!AUDIO.sfxOn || !AUDIO.ctx) return;
@@ -172,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260826 · 索敌全图可锁（仅墙体+队友未锁失败） · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260827 · 死斗13回合CS比分/都市箱庭地图/可进楼房/Tab-KDA/点击锁定不误射/巡飞弹15s+音效/准星打模块/泰坦跳跃 · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -218,7 +225,8 @@ import * as THREE from './three.module.min.js';
     pauseMusicBtn = $('pauseMusicBtn'), pauseSfxBtn = $('pauseSfxBtn'),
     suicideBar = $('suicideBar'), suicideFill = $('suicideFill'),
     lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash'),
-    teamAlive = $('teamAlive'), taRed = $('taRed'), taBlue = $('taBlue'), taScore = $('taScore'),
+    teamAlive = $('teamAlive'), taRed = $('taRed'), taBlue = $('taBlue'), taScore = $('taScore'), taRound = $('taRound'),
+    kdaOverlay = $('kdaOverlay'), kdaList = $('kdaList'),
     mechSelect = $('mechSelect'), msButtons = $('msButtons'),
     msWeapons = $('msWeapons'), msCountdown = $('msCountdown'), msConfirm = $('msConfirm');
 
@@ -282,6 +290,7 @@ import * as THREE from './three.module.min.js';
   let respawnIn = 0, respawnAtLocal = 0;
   let lastShotAt = 0;
   let lastLockFail = 0; // 指针锁定失败时间戳（限流重试）
+  let lockBroken = false; // 指针锁定不可用（pointerlockerror 后置位，降级为「左键直接开火」模式）
   let physAcc = 0; // 固定步长物理累计器
   const prevStep = { x: 0, y: 0, z: 0 }; // 上一物理步位置（渲染插值）
   const curStep = { x: 0, y: 0, z: 0 };  // 当前物理步位置（渲染插值）
@@ -315,6 +324,7 @@ import * as THREE from './three.module.min.js';
   let selfLastX = 0, selfLastZ = 0;
   let camShake = 0;              // 受击镜头震动
   let myClimbing = false;        // 本地预测：蜘蛛爬墙
+  let myLastJumpAt = 0;          // 本地预测：泰坦跳跃冷却时间戳
   // ===== 索敌锁定 =====
   let lockTargetId = null;       // 当前锁定目标 id
   let lockEl = null;             // 锁定框 DOM
@@ -596,7 +606,7 @@ import * as THREE from './three.module.min.js';
   const WEAPON_ORDER = ['gau12', 'laser', 'loiter'];
   const WEAPON_LABEL = { gau12: ['Gau12', '机炮'], laser: ['灼光', '镭射'], loiter: ['蜂群', '巡飞'] };
   function mechDisplayName(type) {
-    return type === 'spider' ? '🕷 猎蛛' : '🤖 泰坦';
+    return type === 'spider' ? '🕷 猎蛛' : '🤖 泰坦 ⬆跳跃';
   }
 
   function initHangar() {
@@ -1447,6 +1457,23 @@ import * as THREE from './three.module.min.js';
       }).join('');
     }
     if (duel && duel.roundWins) taScore.textContent = duel.roundWins[0] + ' : ' + duel.roundWins[1];
+    if (taRound) taRound.textContent = duel && duel.round ? ('第 ' + duel.round + ' 回合') : '';
+  }
+
+  // Tab 查看 KDA 计分板（按住 Tab 显示，松开隐藏；数据来自最新 state）
+  let kdaData = [];
+  function renderKdaOverlay() {
+    if (!kdaOverlay || !kdaList) return;
+    const rows = kdaData.slice().sort((a, b) =>
+      (b.kills - a.kills) || (a.deaths - b.deaths) || (b.assists - a.assists)
+    );
+    kdaList.innerHTML = rows.map((p) =>
+      '<div class="kda-row' + (me && p.id === me.id ? ' me' : '') + '">' +
+      '<span>' + esc(p.name || '?') + '</span>' +
+      '<span class="k">' + (p.kills || 0) + '</span>' +
+      '<span class="d">' + (p.deaths || 0) + '</span>' +
+      '<span class="a">' + (p.assists || 0) + '</span></div>'
+    ).join('');
   }
 
   // ---------- 暂停 / 自杀 ----------
@@ -1758,6 +1785,11 @@ import * as THREE from './three.module.min.js';
     for (const [id, rp] of remotePlayers) {
       if (!seen.has(id)) { removeRemotePlayer(id); }
     }
+    // KDA 数据（Tab 计分板）
+    kdaData = payload.players.map((p) => ({
+      id: p.id, name: p.name, kills: p.kills || 0, deaths: p.deaths || 0, assists: p.assists || 0,
+    }));
+    if (kdaOverlay && !kdaOverlay.classList.contains('hidden')) renderKdaOverlay();
     // 同步自身分数/战绩 + 服务器权威校正
     if (me) {
       for (const sp of payload.players) {
@@ -1827,13 +1859,16 @@ import * as THREE from './three.module.min.js';
     if (payload.impacts) {
       for (const im of payload.impacts) spawnSparks(im.x, im.y, im.z, 3);
     }
-    // 音效：激光束持续音 / 巡飞弹齐射哨声 / 爆炸轰鸣
+    // 音效：激光束持续音 / 巡飞弹齐射哨声 / 爆炸轰鸣（自己的巡飞弹爆炸用命中音效）
     if (me) {
       updateLaserSound((payload.beams || []).some((b) => b.owner === me.id));
       const ownLoiters = (payload.projectiles || []).filter((p) => p.kind === 'loiter' && p.owner === me.id).length;
       if (ownLoiters > AUDIO.lastOwnLoiter) sfxLoiter();
       AUDIO.lastOwnLoiter = ownLoiters;
-      if (payload.explosions && payload.explosions.length > 0) sfxExplosion();
+      if (payload.explosions && payload.explosions.length > 0) {
+        const myLoiterHit = payload.explosions.some((x) => x.kind === 'loiter' && x.owner === me.id);
+        if (myLoiterHit) sfxLoiterHit(); else sfxExplosion();
+      }
     }
     // 死斗 HUD（基地核心部署进度 / 剩余机甲）
     if (gameMode === 'duel' && payload.duel) updateDuelHud(payload.duel);
@@ -1999,8 +2034,9 @@ import * as THREE from './three.module.min.js';
     colliders = mapData.boxes.map(toAABB);
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x05070f);
-    scene.fog = new THREE.FogExp2(0x05070f, 0.007);
+    const skyTex = makeSkyTexture();
+    scene.background = skyTex;
+    scene.fog = new THREE.FogExp2(0x070b18, 0.006);
 
     const s = gameSize();
     camera = new THREE.PerspectiveCamera(75, s.w / s.h, 0.1, 500);
@@ -2023,7 +2059,7 @@ import * as THREE from './three.module.min.js';
     pl2.position.set(-35, 10, -35);
     scene.add(pl2);
 
-    // 地面（霓虹网格）
+    // 地面（霓虹街巷：路面 + 车道线 + 人行道方格）
     const size = mapData.size.x;
     const gridTex = makeGridTexture();
     const ground = new THREE.Mesh(
@@ -2033,8 +2069,12 @@ import * as THREE from './three.module.min.js';
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
 
-    // 外圈墙壁
-    const wallMat = new THREE.MeshBasicMaterial({ color: 0x14224a, transparent: true, opacity: 0.85 });
+    // 城市天际线剪影（围墙外一圈高楼，带霓虹窗）
+    buildCitySkyline();
+
+    // 外圈墙壁（带玻璃幕墙贴图）
+    const wallTex = makeWallTexture();
+    const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.8, metalness: 0.3 });
     const wallEdge = new THREE.LineBasicMaterial({ color: 0x7df9ff });
     const half = size / 2, wh = mapData.wallHeight;
     const wallBoxes = [
@@ -2052,9 +2092,10 @@ import * as THREE from './three.module.min.js';
       scene.add(edges);
     });
 
-    // 障碍物盒子
+    // 障碍物盒子（楼房墙体已带 building 标记，单独用贴图绘制）
     const boxColors = [0x1e2a5e, 0x2a1e5e, 0x1e5e4a, 0x5e1e3a, 0x3a1e5e];
     mapData.boxes.forEach((b, i) => {
+      if (b.building !== undefined) return; // 楼房在 buildBuildings 里绘制
       const m = new THREE.Mesh(
         new THREE.BoxGeometry(b.sx, b.sy, b.sz),
         new THREE.MeshStandardMaterial({
@@ -2065,6 +2106,9 @@ import * as THREE from './three.module.min.js';
       m.position.set(b.x, b.y, b.z);
       scene.add(m);
     });
+
+    // 可进入楼房（贴图外墙 + 门洞）
+    buildBuildings();
 
     // 跳跳台
     padMeshes = mapData.jumpPads.map((pad) => {
@@ -2119,6 +2163,7 @@ import * as THREE from './three.module.min.js';
 
     renderer.domElement.addEventListener('click', () => {
       if (isTouch || !started || ctfVoting() || pauseOpen || mechSelecting() || document.pointerLockElement === renderer.domElement) return;
+      if (lockBroken) return; // 锁定不可用，不再尝试
       if (performance.now() - lastLockFail < 2000) return;
       try { renderer.domElement.requestPointerLock(); } catch (e) { /* ignore */ }
     });
@@ -2129,19 +2174,187 @@ import * as THREE from './three.module.min.js';
     const c = document.createElement('canvas');
     c.width = c.height = 512;
     const g = c.getContext('2d');
+    // 城市街巷地面：深色沥青 + 车道线 + 人行道方格
     g.fillStyle = '#0a0f1e';
     g.fillRect(0, 0, 512, 512);
-    g.strokeStyle = 'rgba(34,211,238,0.28)';
-    g.lineWidth = 2;
+    g.strokeStyle = 'rgba(34,211,238,0.18)';
+    g.lineWidth = 3;
     const step = 32;
     for (let i = 0; i <= 512; i += step) {
       g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 512); g.stroke();
       g.beginPath(); g.moveTo(0, i); g.lineTo(512, i); g.stroke();
     }
+    // 车道虚线（横向主干道）
+    g.strokeStyle = 'rgba(255,214,90,0.5)';
+    g.lineWidth = 2;
+    g.setLineDash([10, 8]);
+    for (let i = 0; i <= 512; i += 64) {
+      g.beginPath(); g.moveTo(0, i + 32); g.lineTo(512, i + 32); g.stroke();
+    }
+    g.setLineDash([]);
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(90 / 4, 90 / 4);
     return tex;
+  }
+
+  // 天空渐变贴图（城市夜景）：深蓝 → 紫 → 地平线橙红
+  function makeSkyTexture() {
+    const c = document.createElement('canvas');
+    c.width = 32; c.height = 256;
+    const g = c.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, '#04060f');
+    grad.addColorStop(0.45, '#0b1030');
+    grad.addColorStop(0.75, '#2a1a4a');
+    grad.addColorStop(0.92, '#4a2a5a');
+    grad.addColorStop(1, '#6a3a5a');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 32, 256);
+    // 星星
+    g.fillStyle = '#cfe0ff';
+    for (let i = 0; i < 40; i++) {
+      g.globalAlpha = 0.3 + Math.random() * 0.7;
+      g.fillRect(Math.random() * 32, Math.random() * 160, 1, 1);
+    }
+    g.globalAlpha = 1;
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  // 外圈围墙贴图：玻璃幕墙 + 霓虹灯带
+  function makeWallTexture() {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    const g = c.getContext('2d');
+    g.fillStyle = '#0d1530';
+    g.fillRect(0, 0, 128, 128);
+    // 横带
+    g.fillStyle = 'rgba(125,249,255,0.16)';
+    for (let y = 8; y < 128; y += 24) g.fillRect(0, y, 128, 3);
+    // 窗格
+    g.fillStyle = 'rgba(34,211,238,0.35)';
+    for (let y = 4; y < 128; y += 24) {
+      for (let x = 4; x < 128; x += 20) {
+        g.fillRect(x, y, 12, 14);
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(6, 1.4);
+    return tex;
+  }
+
+  // 楼房外墙贴图（窗户 + 霓虹窗格），color 为墙面主色
+  function makeBuildingTexture(colorHex) {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    const g = c.getContext('2d');
+    const base = new THREE.Color(colorHex || 0x3a5a9a);
+    g.fillStyle = '#' + base.getHexString();
+    g.fillRect(0, 0, 128, 128);
+    // 窗格
+    for (let y = 6; y < 128; y += 22) {
+      for (let x = 6; x < 128; x += 22) {
+        g.fillStyle = Math.random() < 0.6 ? 'rgba(125,249,255,0.55)' : 'rgba(10,15,30,0.7)';
+        g.fillRect(x, y, 14, 12);
+        g.fillStyle = 'rgba(255,255,255,0.08)';
+        g.fillRect(x + 3, y + 2, 2, 8);
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(3, 2);
+    return tex;
+  }
+
+  // 围墙外一圈城市天际线剪影（高楼 + 亮窗），形成城市背景
+  function buildCitySkyline() {
+    const size = mapData.size.x;
+    const half = size / 2;
+    const ring = [
+      { x: 0, z: -(half + 26), w: 60, h: 30 },
+      { x: 0, z: (half + 26), w: 60, h: 26 },
+      { x: -(half + 26), z: 0, w: 60, h: 32 },
+      { x: (half + 26), z: 0, w: 60, h: 28 },
+    ];
+    // 每面一排高低错落的大楼
+    for (const side of ring) {
+      const n = 7;
+      for (let i = 0; i < n; i++) {
+        const f = (i + 0.5) / n - 0.5;
+        const hgt = side.h * (0.55 + Math.abs(Math.sin(i * 1.7)) * 0.55) + 8;
+        const wdt = 7 + Math.random() * 5;
+        const m = new THREE.Mesh(
+          new THREE.BoxGeometry(wdt, hgt, wdt),
+          new THREE.MeshStandardMaterial({
+            map: makeBuildingTexture([0x1a2244, 0x2a1a44, 0x142a44, 0x221a44][i % 4]),
+            emissive: new THREE.Color(0x0a1230), emissiveIntensity: 0.5,
+            roughness: 0.85, metalness: 0.1,
+          })
+        );
+        let px = side.x + (side.w === 60 ? f * side.w : 0);
+        let pz = side.z + (side.w === 60 ? 0 : f * side.w);
+        if (side.x !== 0 && side.z === 0) { pz = f * side.w; px = side.x; }
+        if (side.x === 0 && side.z !== 0) { px = f * side.w; pz = side.z; }
+        m.position.set(px, hgt / 2, pz);
+        scene.add(m);
+      }
+    }
+  }
+
+  // 可进入楼房：四面墙（贴图）留门洞，与服务器碰撞盒一一对应
+  function buildBuildings() {
+    const T = 0.5, DOOR_W = 2.6;
+    (mapData.buildings || []).forEach((b) => {
+      const tex = makeBuildingTexture(b.color);
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, metalness: 0.2 });
+      const edgeMat = new THREE.LineBasicMaterial({ color: 0x7df9ff, transparent: true, opacity: 0.5 });
+      const x0 = b.x - b.w / 2, x1 = b.x + b.w / 2;
+      const z0 = b.z - b.d / 2, z1 = b.z + b.d / 2;
+      const y = b.h / 2;
+      const wall = (bx, bz, sx, sz) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(sx, b.h, sz), mat);
+        m.position.set(bx, y, bz);
+        scene.add(m);
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), edgeMat);
+        edges.position.copy(m.position);
+        scene.add(edges);
+      };
+      // 与服务器 map.js genBuildingWalls 完全一致的墙体生成（门洞居中）
+      // 北墙（z0）
+      if (b.doorSide === 'north') {
+        const l = (b.w - DOOR_W) / 2;
+        if (l > 0.1) { wall(x0 + l / 2, z0, l, T); wall(x1 - l / 2, z0, l, T); }
+      } else wall(b.x, z0, b.w, T);
+      // 南墙（z1）
+      if (b.doorSide === 'south') {
+        const l = (b.w - DOOR_W) / 2;
+        if (l > 0.1) { wall(x0 + l / 2, z1, l, T); wall(x1 - l / 2, z1, l, T); }
+      } else wall(b.x, z1, b.w, T);
+      // 西墙（x0）
+      if (b.doorSide === 'west') {
+        const l = (b.d - DOOR_W) / 2;
+        if (l > 0.1) { wall(x0, z0 + l / 2, T, l); wall(x0, z1 - l / 2, T, l); }
+      } else wall(x0, b.z, T, b.d);
+      // 东墙（x1）
+      if (b.doorSide === 'east') {
+        const l = (b.d - DOOR_W) / 2;
+        if (l > 0.1) { wall(x1, z0 + l / 2, T, l); wall(x1, z1 - l / 2, T, l); }
+      } else wall(x1, b.z, T, b.d);
+      // 门楣发光（门洞上方）
+      const lintel = new THREE.Mesh(
+        new THREE.BoxGeometry(3.2, 0.4, 0.4),
+        new THREE.MeshBasicMaterial({ color: 0x7df9ff, transparent: true, opacity: 0.8 })
+      );
+      const d = b.doorSide;
+      if (d === 'north') lintel.position.set(b.x, 2.8, z0);
+      else if (d === 'south') lintel.position.set(b.x, 2.8, z1);
+      else if (d === 'west') lintel.position.set(x0, 2.8, b.z);
+      else lintel.position.set(x1, 2.8, b.z);
+      scene.add(lintel);
+    });
   }
 
   function onResize() {
@@ -2353,6 +2566,13 @@ import * as THREE from './three.module.min.js';
     if (myClimbing) myVel.y = 7;
     if (moveAxis(myPos, myVel, 'y', dt, colliders)) grounded = true;
     if (myPos.y <= 0 && myVel.y <= 0) { myPos.y = 0; myVel.y = 0; grounded = true; }
+    // 泰坦跳跃技能（与服务端一致：可跳越部分墙体；冷却 2.5s；受「弹跳」卡加成）
+    const selfMechCfg = me && me.mechType && NS.MECHS[me.mechType];
+    if (selfMechCfg && selfMechCfg.canJump && grounded && inputJump() &&
+        (performance.now() - (myLastJumpAt || 0)) >= selfMechCfg.jumpCooldownMs) {
+      myVel.y = selfMechCfg.jumpVel * localJumpMul();
+      myLastJumpAt = performance.now();
+    }
     const half = mapData.size.x / 2 - PLAYER_R;
     myPos.x = clamp(myPos.x, -half, half);
     myPos.z = clamp(myPos.z, -half, half);
@@ -2362,7 +2582,6 @@ import * as THREE from './three.module.min.js';
         myVel.y = pad.strength;
       }
     }
-    // 已禁用跳跃（跳跳台弹射保留）
   }
 
   // =========================================================
@@ -2507,6 +2726,12 @@ import * as THREE from './three.module.min.js';
   document.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     if (e.code === 'Space') e.preventDefault();
+    if (e.code === 'Tab' && started) {
+      e.preventDefault();
+      if (!kdaOverlay.classList.contains('hidden')) return;
+      kdaOverlay.classList.remove('hidden');
+      renderKdaOverlay();
+    }
     if (e.code === 'Escape' && started) {
       e.preventDefault();
       setPause(!pauseOpen);
@@ -2516,9 +2741,14 @@ import * as THREE from './three.module.min.js';
   document.addEventListener('keyup', (e) => {
     keys[e.code] = false;
     if (e.code === 'KeyJ') stopSuicideHold();
+    if (e.code === 'Tab' && kdaOverlay) kdaOverlay.classList.add('hidden');
   });
   document.addEventListener('mousedown', (e) => {
     if (isTouch || e.button !== 0 || !started || ctfVoting() || pauseOpen || mechSelecting()) return;
+    // 网页端点击画面是为了获取指针锁定（或 ESC 解锁后重新锁定），该次点击不应触发开火，
+    // 否则会误射一发并让巡飞弹进入装填；仅指针已锁定（或锁定不可用的降级模式）时左键才是开火。
+    const locked = document.pointerLockElement === renderer.domElement;
+    if (!locked && !lockBroken) return; // 只锁定，不开火（click 事件里会 requestPointerLock）
     fire = true;
     if (performance.now() - lastShotAt >= FIRE_CD) {
       lastShotAt = performance.now();
@@ -2546,6 +2776,7 @@ import * as THREE from './three.module.min.js';
   document.addEventListener('pointerlockchange', () => {
     if (!started || isTouch || ctfVoting()) return;
     const locked = document.pointerLockElement === renderer.domElement;
+    if (locked) lockBroken = false;
     if (!locked) fire = false; // 解锁时复位开火，避免卡键连续射击
     if (locked) showHint('已锁定鼠标 · 移动鼠标旋转视角 · ESC 解锁', 2000);
     else showHint('点击画面重新锁定（CS:GO 视角）· 右键拖拽也可转视角', 4000);
@@ -2553,6 +2784,7 @@ import * as THREE from './three.module.min.js';
   document.addEventListener('pointerlockerror', () => {
     if (isTouch) return;
     lastLockFail = performance.now();
+    lockBroken = true;
     showHint('此环境点击锁定不可用，请按住鼠标右键拖拽旋转视角 · 左键射击', 4000);
   });
 
