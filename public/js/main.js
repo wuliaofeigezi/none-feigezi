@@ -163,7 +163,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260821 · 音乐/音效 · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260823 · 修复激光束崩溃/锁定重发 · 如加载旧版请强制刷新/清除缓存');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -959,6 +959,8 @@ import * as THREE from './three.module.min.js';
   }
 
   // 索敌：准星附近（屏幕 70px 内）最近的可锁定敌人；未瞄到敌人时保持当前锁定
+  // 索敌：准星附近（屏幕 110px 内）最近的可锁定敌人；未瞄到敌人时保持当前锁定；
+  // 每 400ms 重发一次锁定请求（墙体/距离短暂受阻后自动重新获取）
   function updateLockTarget() {
     if (!started || !me || !me.alive || pauseOpen || ctfVoting() || mechSelecting()) {
       if (lockTargetId) { lockTargetId = null; sendLock(null); }
@@ -974,16 +976,20 @@ import * as THREE from './three.module.min.js';
       center.copy(rp.target).add({ x: 0, y: 1.1, z: 0 });
       const v = projectToScreen(center);
       if (v.behind) continue;
-      if (Math.hypot(v.x - cx0, v.y - cy0) > 90) continue;
+      if (Math.hypot(v.x - cx0, v.y - cy0) > 110) continue;
       const d3 = Math.hypot(rp.target.x - myPos.x, rp.target.y - myPos.y, rp.target.z - myPos.z);
       if (d3 > 60 || d3 >= bestD3) continue;
       bestD3 = d3;
       best = id;
     }
-    if (best && best !== lockTargetId) {
-      lockTargetId = best;
-      sendLock(best);
-    } else if (!best && lockTargetId && !remotePlayers.has(lockTargetId)) {
+    const now = performance.now();
+    if (best) {
+      if (best !== lockTargetId || now - lockSentAt > 400) {
+        lockTargetId = best;
+        lockSentAt = now;
+        sendLock(best);
+      }
+    } else if (lockTargetId && !remotePlayers.has(lockTargetId)) {
       lockTargetId = null;
       sendLock(null);
     }
@@ -1205,33 +1211,38 @@ import * as THREE from './three.module.min.js';
       if (s.hit) spawnSparks(s.x2, s.y2, s.z2, 3); // 命中火花
     }
   }
-  function getBeamMesh() {
-    for (const m of beamMeshes) if (!m.visible) { m.visible = true; return m; }
-    const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.09, 0.09, 1, 8),
-      new THREE.MeshBasicMaterial({ color: 0xff4d6b, transparent: true, opacity: 0.95 })
-    );
-    mesh.visible = false;
-    scene.add(mesh);
-    beamMeshes.push(mesh);
-    return mesh;
-  }
+  // 激光束渲染：核心亮芯 + 外层辉光（索引与列表一一对应，杜绝池复用崩溃）
   function updateBeams(beams) {
     const list = beams || [];
-    for (let i = 0; i < beamMeshes.length; i++) {
-      if (i >= list.length) { beamMeshes[i].visible = false; continue; }
+    for (const g of beamMeshes) g.visible = false;
+    for (let i = 0; i < list.length; i++) {
+      let g = beamMeshes[i];
+      if (!g) {
+        g = new THREE.Group();
+        const core = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.13, 0.13, 1, 10),
+          new THREE.MeshBasicMaterial({ color: 0xfff1f5, transparent: true, opacity: 0.95 })
+        );
+        const glow = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.3, 0.3, 1, 10),
+          new THREE.MeshBasicMaterial({ color: 0xff2d55, transparent: true, opacity: 0.35 })
+        );
+        g.add(core, glow);
+        g.visible = false;
+        scene.add(g);
+        beamMeshes.push(g);
+      }
+      g.visible = true;
       const b = list[i];
-      const m = getBeamMesh();
       const a = new THREE.Vector3(b.x1, b.y1, b.z1);
       const c = new THREE.Vector3(b.x2, b.y2, b.z2);
       const len = a.distanceTo(c) || 0.01;
-      m.position.copy(a).add(c).multiplyScalar(0.5);
-      m.scale.set(1, len, 1);
-      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), c.clone().sub(a).normalize());
-      m.material.opacity = 0.75 + 0.25 * Math.sin(performance.now() * 0.02);
+      g.position.copy(a).add(c).multiplyScalar(0.5);
+      g.scale.set(1, len, 1);
+      g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), c.clone().sub(a).normalize());
+      g.children[0].material.opacity = 0.85 + 0.15 * Math.sin(performance.now() * 0.03);
+      g.children[1].material.opacity = 0.3 + 0.15 * Math.sin(performance.now() * 0.03);
     }
-    // 多余的隐藏
-    for (let i = list.length; i < beamMeshes.length; i++) beamMeshes[i].visible = false;
   }
   function getLoiterMesh() {
     for (const m of loiterMeshes) if (!m.active) { m.active = true; m.mesh.visible = true; m.trail.visible = true; return m; }
