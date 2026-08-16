@@ -7,17 +7,18 @@ const MAP = {
   wallHeight: 14,         // 外圈围墙高度（蜘蛛可攀爬）
   theme: 'city',          // 城市主题（客户端贴图/背景）
 
-  // 可进入楼房（客户端渲染为贴图建筑；墙+门洞生成碰撞盒加入 boxes）
-  // doorSide: north/south/east/west 开门的方位（避开出生点/测试走廊）
+  // 楼房（客户端渲染为贴图建筑；墙+门洞生成碰撞盒加入 boxes）
+  // enterable: true=有门洞可进入；false=全封闭不可进入（外墙贴图+屋顶）
+  // doorSide: north/south/east/west 开门的方位（仅 enterable 时有效，避开出生点/测试走廊）
   buildings: [
-    { x: -16, z: 24, w: 10, d: 8, h: 6, doorSide: 'south', color: 0x3a5a9a },
-    { x: 16, z: 28, w: 10, d: 8, h: 6, doorSide: 'north', color: 0x9a5a3a },
-    { x: -16, z: -30, w: 10, d: 8, h: 6, doorSide: 'east', color: 0x3a9a7a },
-    { x: 16, z: -30, w: 10, d: 8, h: 6, doorSide: 'west', color: 0x7a3a9a },
-    { x: 0, z: -34, w: 12, d: 7, h: 7, doorSide: 'south', color: 0x5a5a9a },
-    { x: 0, z: 34, w: 12, d: 7, h: 7, doorSide: 'north', color: 0x9a9a5a },
-    { x: -36, z: 0, w: 6, d: 12, h: 8, doorSide: 'east', color: 0x4a7a7a },
-    { x: 36, z: 0, w: 6, d: 12, h: 8, doorSide: 'west', color: 0x7a4a7a },
+    { x: -16, z: 24, w: 10, d: 8, h: 6, enterable: true, doorSide: 'south', color: 0x3a5a9a },
+    { x: 16, z: 28, w: 10, d: 8, h: 6, enterable: true, doorSide: 'north', color: 0x9a5a3a },
+    { x: -16, z: -30, w: 10, d: 8, h: 6, enterable: true, doorSide: 'east', color: 0x3a9a7a },
+    { x: 16, z: -30, w: 10, d: 8, h: 6, enterable: true, doorSide: 'west', color: 0x7a3a9a },
+    { x: 0, z: -34, w: 12, d: 7, h: 7, enterable: false, color: 0x5a5a9a },
+    { x: 0, z: 34, w: 12, d: 7, h: 7, enterable: false, color: 0x9a9a5a },
+    { x: -36, z: 0, w: 6, d: 12, h: 8, enterable: false, color: 0x4a7a7a },
+    { x: 36, z: 0, w: 6, d: 12, h: 8, enterable: false, color: 0x7a4a7a },
   ],
 
   // 静态障碍物 {x,y,z,sx,sy,sz}（buildings 的墙也会追加进来）
@@ -144,6 +145,15 @@ const MAP = {
     const z0 = b.z - b.d / 2, z1 = b.z + b.d / 2;
     const y = b.h / 2;
     const push = (bx, bz, sx, sz) => MAP.boxes.push({ x: bx, y, z: bz, sx, sy: b.h, sz, building: bi });
+    // 不可进入楼房：四面实墙 + 屋顶（防止跳跃/爬墙进入）
+    if (b.enterable === false) {
+      push(b.x, z0, b.w, T);   // 北
+      push(b.x, z1, b.w, T);   // 南
+      push(x0, b.z, T, b.d);   // 西
+      push(x1, b.z, T, b.d);   // 东
+      MAP.boxes.push({ x: b.x, y: b.h + 0.25, z: b.z, sx: b.w + T * 2, sy: 0.5, sz: b.d + T * 2, building: bi, roof: true });
+      return;
+    }
     // 北墙（z0）
     if (b.doorSide === 'north') {
       const l = (b.w - DOOR_W) / 2;

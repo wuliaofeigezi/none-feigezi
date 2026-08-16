@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260829 · 修复长按J自杀失效（按键自动重复重置计时） · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260830 · 都市地图完善：贴图sRGB/各向异性修复过暗、部分楼房不可进入(实墙+屋顶) · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -2198,6 +2198,7 @@ import * as THREE from './three.module.min.js';
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(90 / 4, 90 / 4);
+    tex.colorSpace = THREE.SRGBColorSpace; // r152+ 颜色管理：贴图需声明 sRGB，否则过暗
     return tex;
   }
 
@@ -2247,6 +2248,8 @@ import * as THREE from './three.module.min.js';
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(6, 1.4);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4; // 斜视角下窗户/灯带更清晰
     return tex;
   }
 
@@ -2270,6 +2273,8 @@ import * as THREE from './three.module.min.js';
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(3, 2);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
     return tex;
   }
 
@@ -2308,7 +2313,7 @@ import * as THREE from './three.module.min.js';
     }
   }
 
-  // 可进入楼房：四面墙（贴图）留门洞，与服务器碰撞盒一一对应
+  // 楼房：可进入的四面墙留门洞；不可进入的实墙+屋顶（与服务器碰撞盒一一对应）
   function buildBuildings() {
     const T = 0.5, DOOR_W = 2.6;
     (mapData.buildings || []).forEach((b) => {
@@ -2326,6 +2331,15 @@ import * as THREE from './three.module.min.js';
         edges.position.copy(m.position);
         scene.add(edges);
       };
+      // 不可进入楼房：四面实墙 + 屋顶（防止跳跃/爬墙进入）
+      if (b.enterable === false) {
+        wall(b.x, z0, b.w, T); wall(b.x, z1, b.w, T);
+        wall(x0, b.z, T, b.d); wall(x1, b.z, T, b.d);
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(b.w + T * 2, 0.5, b.d + T * 2), mat);
+        roof.position.set(b.x, b.h + 0.25, b.z);
+        scene.add(roof);
+        return;
+      }
       // 与服务器 map.js genBuildingWalls 完全一致的墙体生成（门洞居中）
       // 北墙（z0）
       if (b.doorSide === 'north') {
