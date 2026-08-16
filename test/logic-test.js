@@ -1,33 +1,45 @@
 'use strict';
-// 确定性逻辑测试：物理、跳跳台、射击伤害、击杀、复活、箱顶站立（直接驱动 Game，不依赖网络）
+// 确定性逻辑测试：物理、跳跳台、射击伤害、击杀、复活、箱顶站立、房间席位迁移
+// 直接驱动 Game / Room（不依赖网络），需与当前 server 代码 API 保持同步
 const assert = require('assert');
 const { Game } = require('../server/game');
 const { MAP } = require('../server/map');
+const { RoomManager, Room } = require('../server/rooms');
+
+const sockets = new Map();
+const emitted = [];
+const io = {
+  sockets: { sockets },
+  to() { return { emit(ev, data) { emitted.push([ev, data]); } }; },
+  emit() {},
+  on() {},
+};
 
 function fakeSocket(id) {
   const handlers = {};
-  const emitted = [];
   const s = {
-    id, emitted,
-    emit(ev, data) { emitted.push([ev, data]); },
+    id,
+    emitted: [],
+    join() {},
+    emit(ev, data) { s.emitted.push([ev, data]); },
     on(ev, fn) { handlers[ev] = fn; },
     trigger(ev, data) { if (handlers[ev]) handlers[ev](data); },
     disconnect() {},
   };
+  sockets.set(id, s);
   return s;
 }
 
-const sockets = new Map();
-const io = { sockets: { sockets }, emit() {}, on() {} };
-const game = new Game(io);
-
 const A = fakeSocket('A');
 const B = fakeSocket('B');
-// 不调用 game.start()（避免真实 interval 竞争），手动注册连接处理
-game.onConnect(A);
-game.onConnect(B);
-A.trigger('join', { name: 'Alice' });
-B.trigger('join', { name: 'Bob' });
+const game = new Game(io, 'room_logic', { mode: 'ffa', maxPlayers: 16, matchMinutes: 5 }, {});
+// start() 会启动真实 interval，测试中立即停掉，改为手动 tick 驱动
+game.start([
+  { socketId: 'A', name: 'Alice', sessionId: 'sid_alice' },
+  { socketId: 'B', name: 'Bob', sessionId: 'sid_bob' },
+]);
+clearInterval(game.timer);
+game.timer = null;
 
 const pA = game.players.get('A');
 const pB = game.players.get('B');
@@ -118,6 +130,32 @@ input(A, { fwd: 1, yaw: 0 });
 for (let i = 0; i < 5; i++) game.tick();
 assert(Math.abs(pA.pos.x) <= 45 && Math.abs(pA.pos.z) <= 45, '不应越出场地边界');
 
+// ---- 11. 断线重连恢复（Game 层）：同 sessionId 恢复原玩家，并返回旧 socketId ----
+game.onLeave('A'); // 模拟 Alice 断线（connected=false）
+assert(!game.players.get('A').connected, '断线后 connected 应为 false');
+const oldId = game.resume(fakeSocket('A2'), 'sid_alice');
+assert(oldId === 'A', 'resume 应返回旧 socketId');
+assert(game.players.has('A2') && !game.players.has('A'), '玩家 key 应迁移到新 socketId');
+assert(game.players.get('A2').name === 'Alice' && game.players.get('A2').score === pA.score, '恢复玩家数据应保留');
+
+// ---- 12. 房间席位迁移（rooms 层，断线重连幽灵席位修复） ----
+const rm = new RoomManager(io);
+const hostSock = fakeSocket('H');
+const bobSock = fakeSocket('B3');
+const room = new Room(rm, io, hostSock, { mode: 'ffa', maxPlayers: 8, matchMinutes: 5 });
+room.addPlayer(hostSock, { name: 'Host', sessionId: 'sid_host' });
+room.addPlayer(bobSock, { name: 'Bob', sessionId: 'sid_bob3' });
+assert(room.players.has('H') && room.players.has('B3'), '席位应存在');
+assert(room.migrateSeat('B3', 'B3_new') === true, '迁移应成功');
+assert(!room.players.has('B3') && room.players.has('B3_new'), '旧席位应移除、新席位应建立');
+assert(room.players.get('B3_new').name === 'Bob', '迁移后玩家数据应保留');
+assert(room.migrateSeat('H', 'H_new') === true, '房主席位迁移应成功');
+assert(room.hostId === 'H_new' && room.players.get('H_new').isHost, '房主身份应跟随迁移');
+assert(room.migrateSeat('H_new', 'B3_new') === false, '目标席位已占用应拒绝迁移');
+assert(room.players.size === 2, '迁移不应改变席位总数');
+// 模拟对局结束：席位 key 已迁移，onPlayerGone 能正确清空
+room.onPlayerGone('B3_new');
+assert(!room.players.has('B3_new'), '对局结束应能移除迁移后的席位（不留幽灵席位）');
+
 console.log('\n✅ 全部逻辑测试通过');
-game.timer && clearInterval(game.timer);
 process.exit(0);

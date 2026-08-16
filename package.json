@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server/index.js",
     "vendor": "node deploy/vendor.js",
-    "deploy": "node deploy/upload.js"
+    "deploy": "node deploy/upload.js",
+    "test": "node test/logic-test.js && node test/zone-test.js",
+    "test:smoke": "node test/smoke.js"
   },
   "engines": {
     "node": ">=18"
@@ -18,6 +20,7 @@
     "three": "^0.165.0"
   },
   "devDependencies": {
+    "socket.io-client": "^4.7.5",
     "ssh2": "^1.15.0"
   }
 }
