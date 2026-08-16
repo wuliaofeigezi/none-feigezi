@@ -2184,9 +2184,9 @@ import * as THREE from './three.module.min.js';
         px + Math.sin(yaw) * cpc * camDist, py + camHgt, pz + Math.cos(yaw) * cpc * camDist,
         px, py + 1.2, pz
       );
-      // 相机被地形挡住拉近时：抬高越过障碍，避免机甲糊脸遮挡
+      // 相机被地形挡住拉近时：轻微抬高越过障碍（保持低视角，不再抬到 5.0）
       if (Math.hypot(camPos.x - px, camPos.z - pz) < 3.0) {
-        camPos.y = py + 5.0;
+        camPos.y = py + 1.6;
         camPos.x = px + Math.sin(yaw) * cpc * 2.0;
         camPos.z = pz + Math.cos(yaw) * cpc * 2.0;
       }

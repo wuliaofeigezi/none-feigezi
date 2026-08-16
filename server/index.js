@@ -9,7 +9,15 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 
 const app = express();
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// 禁用 js/html/css 缓存：每次更新部署后浏览器必须拉到最新代码（配合 index.html 里的 ?v= 版本号）
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  maxAge: 0,
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.js') || filePath.endsWith('.html') || filePath.endsWith('.css')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+  },
+}));
 app.get('/healthz', (req, res) => res.json({ ok: true, game: 'neon-arena' }));
 
 const server = http.createServer(app);
