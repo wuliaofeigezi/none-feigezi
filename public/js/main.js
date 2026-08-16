@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260831 · 平衡调整：机炮伤害翻倍(1→2)，巡飞弹削弱(20→12伤、爆炸半径3.2→2.4) · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260901 · 泰坦/猎蛛建模精细化：末世久经沙场厚重机甲（旧化装甲/铆钉/散热格栅/油桶铁链/战损补丁/利爪足尖） · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -737,6 +737,78 @@ import * as THREE from './three.module.min.js';
   }
   function box(w, h, d, mat) { return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); }
 
+  // 末世久经沙场装甲贴图：底色 + 锈蚀/划痕/泥污/面板线/铆钉/掉漆
+  function makeArmorTexture(baseColor) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const g = c.getContext('2d');
+    const base = baseColor instanceof THREE.Color ? baseColor : new THREE.Color(baseColor || 0x888888);
+    // 底色
+    g.fillStyle = '#' + base.getHexString();
+    g.fillRect(0, 0, 256, 256);
+    // 明暗噪点（陈旧感）
+    for (let i = 0; i < 900; i++) {
+      const a = 0.03 + Math.random() * 0.06;
+      g.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,' + a + ')' : 'rgba(0,0,0,' + a + ')';
+      g.fillRect(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 3, 2 + Math.random() * 3);
+    }
+    // 锈蚀（橙褐竖流痕，从边缘/缝隙流下）
+    for (let i = 0; i < 26; i++) {
+      const x = Math.random() * 256;
+      const y = Math.random() * 200;
+      const w = 1.5 + Math.random() * 3;
+      g.strokeStyle = 'rgba(150,80,30,' + (0.25 + Math.random() * 0.35) + ')';
+      g.lineWidth = w;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - 0.5) * 6, y + 40 + Math.random() * 60); g.stroke();
+    }
+    // 划痕（浅色细线，随机方向）
+    for (let i = 0; i < 40; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256;
+      g.strokeStyle = 'rgba(230,230,235,' + (0.12 + Math.random() * 0.22) + ')';
+      g.lineWidth = 0.8 + Math.random() * 1.4;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - 0.5) * 34, y + (Math.random() - 0.5) * 22); g.stroke();
+    }
+    // 泥污（暗色斑块）
+    for (let i = 0; i < 18; i++) {
+      g.fillStyle = 'rgba(40,35,25,' + (0.15 + Math.random() * 0.25) + ')';
+      g.beginPath();
+      g.ellipse(Math.random() * 256, Math.random() * 256, 8 + Math.random() * 18, 5 + Math.random() * 12, Math.random() * 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    // 面板线（暗色接缝）
+    g.strokeStyle = 'rgba(10,12,18,0.5)';
+    g.lineWidth = 1.6;
+    g.strokeRect(8, 8, 240, 240);
+    g.strokeRect(64, 64, 128, 128);
+    // 铆钉
+    for (let i = 0; i < 14; i++) {
+      const x = 10 + Math.random() * 236, y = 10 + Math.random() * 236;
+      g.fillStyle = 'rgba(20,22,30,0.75)';
+      g.beginPath(); g.arc(x, y, 2.4, 0, Math.PI * 2); g.fill();
+      g.fillStyle = 'rgba(200,205,215,0.35)';
+      g.beginPath(); g.arc(x - 0.8, y - 0.8, 1, 0, Math.PI * 2); g.fill();
+    }
+    // 掉漆（边缘露底）
+    for (let i = 0; i < 16; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256;
+      g.fillStyle = 'rgba(120,125,135,0.25)';
+      g.fillRect(x, y, 4 + Math.random() * 10, 3 + Math.random() * 7);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    return tex;
+  }
+
+  // 旧化装甲材质：主色贴图 + 锈迹，金属感降低（久经沙场）
+  function wornMat(baseColor, opts) {
+    return new THREE.MeshStandardMaterial(Object.assign({
+      map: makeArmorTexture(baseColor),
+      roughness: 0.75, metalness: 0.4,
+    }, opts || {}));
+  }
+
   function buildMechModel(type, opts) {
     const g = new THREE.Group();
     if (type === 'spider') buildSpiderModel(g, opts || {});
@@ -745,72 +817,115 @@ import * as THREE from './three.module.min.js';
   }
 
   // 人形战斗机器人（精细化）：髋/膝两段式双腿、肩甲、胸部装甲板、背部背包、核心、天线
+  // 人形「泰坦」重型机甲：双腿 + 多层胸甲 + 核心 + 4 战斗模块槽（肩×2 + 头顶×2）
+  // 末世久经沙场风格：旧化装甲、铆钉、散热格栅、油桶/铁链、弹痕补丁、发光核心
   function buildHumanoidModel(g, o) {
     const color = o.color || 0x3b82f6;
     const dark = new THREE.Color(color).multiplyScalar(0.55);
-    const mBody = stdMat(color, 0x0d2a4a);
-    const mDark = stdMat(dark, 0x000000);
-    const mSteel = stdMat(0x8899bb, 0x000000, { metalness: 0.6 });
-    const mAccent = stdMat(0x22d3ee, 0x0e5a66, { metalness: 0.5 });
+    const mBody = wornMat(color);
+    const mDark = wornMat(dark, { roughness: 0.8, metalness: 0.3 });
+    const mSteel = stdMat(0x7a8899, 0x000000, { metalness: 0.6, roughness: 0.45 });
+    const mAccent = stdMat(0xffb84a, 0x5a2a0a, { metalness: 0.4, roughness: 0.55 }); // 废土橙警示
+    const mRust = stdMat(0x8a4a2a, 0x000000, { roughness: 0.9, metalness: 0.1 });
+    const mGlow = stdMat(0x22d3ee, 0x0aa0c0, { emissiveIntensity: 1.4 });
     const legs = [];
     for (let i = 0; i < 2; i++) {
       const pivot = new THREE.Group();
       pivot.position.set(i === 0 ? -0.24 : 0.24, 0.9, 0);
-      // 大腿
-      const thigh = box(0.3, 0.42, 0.3, mSteel); thigh.position.y = -0.21;
-      // 膝关节护甲
-      const knee = box(0.34, 0.14, 0.34, mAccent); knee.position.y = -0.44;
-      // 小腿
-      const shin = box(0.24, 0.42, 0.24, mDark); shin.position.y = -0.68;
-      // 脚掌
-      const foot = box(0.3, 0.12, 0.46, mSteel); foot.position.set(0, -0.9, 0.08);
-      pivot.add(thigh, knee, shin, foot);
+      // 大腿（厚重装甲）
+      const thigh = box(0.34, 0.4, 0.34, mBody); thigh.position.y = -0.2;
+      const thighPad = box(0.38, 0.16, 0.1, mDark); thighPad.position.set(0, -0.16, 0.18);
+      // 膝关节（液压 + 护甲）
+      const knee = box(0.4, 0.16, 0.4, mRust); knee.position.y = -0.42;
+      const kneeSpike = box(0.1, 0.18, 0.1, mAccent); kneeSpike.position.set(0, -0.42, 0.22);
+      // 小腿（装甲 + 格栅）
+      const shin = box(0.26, 0.42, 0.26, mDark); shin.position.y = -0.66;
+      const shinGrate = box(0.02, 0.3, 0.14, mSteel); shinGrate.position.set(0.14, -0.66, 0.06);
+      // 脚掌（厚重基座 + 抓地齿）
+      const foot = box(0.34, 0.14, 0.5, mSteel); foot.position.set(0, -0.9, 0.08);
+      const toe = box(0.3, 0.08, 0.1, mDark); toe.position.set(0, -0.9, 0.32);
+      pivot.add(thigh, thighPad, knee, kneeSpike, shin, shinGrate, foot, toe);
       g.add(pivot);
       legs.push(pivot);
     }
-    // 胸部主装甲
-    const chest = box(1.0, 0.72, 0.62, mBody);
-    chest.position.y = 1.42;
-    g.add(chest);
-    // 胸甲中线装甲条
-    const plate = box(0.5, 0.6, 0.05, mAccent);
-    plate.position.set(0, 1.42, 0.32);
-    g.add(plate);
-    // 侧面散热口
+    // 躯干下裙甲（重装护腰）
     for (const s of [-1, 1]) {
-      const vent = box(0.05, 0.28, 0.3, mDark);
-      vent.position.set(s * 0.53, 1.4, 0);
+      const skirt = box(0.4, 0.34, 0.1, mDark);
+      skirt.position.set(s * 0.38, 1.02, 0.02);
+      skirt.rotation.z = s * -0.12;
+      g.add(skirt);
+    }
+    // 主胸甲（双层）
+    const chest = box(1.04, 0.78, 0.66, mBody);
+    chest.position.y = 1.44;
+    g.add(chest);
+    const chestPlate = box(0.56, 0.6, 0.08, mDark);
+    chestPlate.position.set(0, 1.44, 0.33);
+    g.add(chestPlate);
+    // 散热格栅（侧面）
+    for (const s of [-1, 1]) {
+      const vent = box(0.06, 0.3, 0.34, mSteel);
+      vent.position.set(s * 0.55, 1.42, 0);
+      for (let sl = 0; sl < 4; sl++) {
+        const louver = box(0.08, 0.02, 0.3, mDark);
+        louver.position.set(s * 0.55, 1.42 - 0.11 + sl * 0.07, 0);
+        g.add(louver);
+      }
       g.add(vent);
     }
-    // 背部背包（动力单元）
-    const pack = box(0.7, 0.5, 0.28, mDark);
-    pack.position.set(0, 1.35, -0.44);
+    // 背部动力背包（双层 + 油桶 + 排气管）
+    const pack = box(0.72, 0.52, 0.3, mDark);
+    pack.position.set(0, 1.38, -0.46);
     g.add(pack);
-    const packGlow = box(0.5, 0.12, 0.1, stdMat(0x22d3ee, 0x22d3ee, { emissiveIntensity: 0.8 }));
-    packGlow.position.set(0, 1.35, -0.56);
+    const packGlow = box(0.5, 0.1, 0.06, mGlow);
+    packGlow.position.set(0, 1.38, -0.6);
     g.add(packGlow);
-    // 核心（藏于胸部，发光；胸部破碎后外露脉动）
-    const core = box(0.34, 0.22, 0.1, new THREE.MeshStandardMaterial({
-      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.95,
+    const tank = box(0.18, 0.4, 0.18, mRust);
+    tank.position.set(0.3, 1.42, -0.5);
+    g.add(tank);
+    const exhaust = box(0.1, 0.1, 0.1, mSteel);
+    exhaust.position.set(-0.34, 1.56, -0.5);
+    g.add(exhaust);
+    // 核心（胸口发光，护板环绕）
+    const core = box(0.32, 0.2, 0.06, new THREE.MeshStandardMaterial({
+      color: 0xff4455, emissive: 0xff2244, emissiveIntensity: 1.2,
     }));
-    core.position.set(0, 1.4, 0.34);
+    core.position.set(0, 1.46, 0.37);
     g.add(core);
-    // 无头部：顶部观察窗
-    const dome = box(0.5, 0.14, 0.4, mDark);
-    dome.position.y = 1.8;
+    const coreRing = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.03, 6, 18), mSteel);
+    coreRing.position.set(0, 1.46, 0.35);
+    g.add(coreRing);
+    // 顶部观察舱（低矮 + 探照灯 + 天线）
+    const dome = box(0.52, 0.16, 0.42, mDark);
+    dome.position.y = 1.86;
     g.add(dome);
-    const visor = box(0.3, 0.08, 0.05, stdMat(0x7df9ff, 0x22d3ee, { emissiveIntensity: 0.9 }));
-    visor.position.set(0, 1.8, 0.21);
+    const visor = box(0.34, 0.1, 0.06, mGlow);
+    visor.position.set(0, 1.86, 0.23);
     g.add(visor);
-    // 肩部装甲 + 4 战斗模块槽：两侧肩上一个，顶部（头顶）两个
+    const lamp = box(0.08, 0.08, 0.08, stdMat(0xffffff, 0xfff2b0, { emissiveIntensity: 1.6 }));
+    lamp.position.set(0.16, 1.94, 0.18);
+    g.add(lamp);
+    const antenna = box(0.02, 0.3, 0.02, mSteel);
+    antenna.position.set(-0.18, 2.08, 0.02);
+    g.add(antenna);
+    // 肩部装甲（厚重披肩甲）+ 4 战斗模块槽
     const mounts = [];
     const mountPos = [
       [-0.72, 1.68, 0.14], [0.72, 1.68, 0.14],  // 肩部左右
-      [-0.35, 2.0, 0.05], [0.35, 2.0, 0.05],    // 头顶左右（原肩侧移到头顶）
+      [-0.35, 2.0, 0.05], [0.35, 2.0, 0.05],    // 头顶左右
     ];
+    for (const s of [-1, 1]) {
+      const pauldron = box(0.5, 0.18, 0.46, mBody);
+      pauldron.position.set(s * 0.78, 1.62, 0.04);
+      pauldron.rotation.z = s * -0.14;
+      g.add(pauldron);
+      const ridge = box(0.5, 0.06, 0.1, mRust);
+      ridge.position.set(s * 0.78, 1.72, 0.2);
+      g.add(ridge);
+    }
     for (let i = 0; i < mountPos.length; i++) {
       const [mx, my, mz] = mountPos[i];
-      const pad = box(0.42, 0.1, 0.32, mSteel);
+      const pad = box(0.44, 0.1, 0.34, mSteel);
       pad.position.set(mx, my - 0.09, mz);
       g.add(pad);
       const pivot = new THREE.Group();
@@ -818,58 +933,121 @@ import * as THREE from './three.module.min.js';
       g.add(pivot);
       mounts.push(pivot);
     }
+    // 战损补丁（胸口弹痕）
+    const patch = box(0.14, 0.1, 0.02, mRust);
+    patch.position.set(0.24, 1.28, 0.34);
+    patch.rotation.z = 0.4;
+    g.add(patch);
+    const patch2 = box(0.1, 0.08, 0.02, mRust);
+    patch2.position.set(-0.3, 1.52, 0.34);
+    patch2.rotation.z = -0.3;
+    g.add(patch2);
+    // 铁链（背包侧挂）
+    const chain = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.02, 6, 10), mSteel);
+    chain.position.set(-0.4, 1.2, -0.42);
+    chain.rotation.x = Math.PI / 2;
+    g.add(chain);
     g.userData = { type: 'humanoid', legs, chest, core, mounts, gait: 0 };
   }
 
   // 蜘蛛机器人（精细化）：六条腿 60° 均匀环绕胸部、腹部隆起、核心、3 战斗模块槽
+  // 蜘蛛「猎蛛」重型战斗蜘蛛：六腿 60° 均匀环绕、装甲胸舱、节状腹部、传感器头、3 战斗模块槽
+  // 末世久经沙场风格：旧化装甲、节状甲壳、利爪足尖、锈蚀、核心发光
   function buildSpiderModel(g, o) {
     const color = o.color || 0xa855f7;
     const dark = new THREE.Color(color).multiplyScalar(0.55);
-    const mBody = stdMat(color, 0x1a0d2a);
-    const mDark = stdMat(dark, 0x000000);
-    const mSteel = stdMat(0xbb99dd, 0x000000, { metalness: 0.6 });
-    const mAccent = stdMat(0xff9db8, 0x5a0e2a, { metalness: 0.4 });
-    // 胸部主舱（略扁的六边形舱体：用盒体近似）
-    const chest = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.62, 1.15), mBody);
+    const mBody = wornMat(color);
+    const mDark = wornMat(dark, { roughness: 0.8, metalness: 0.3 });
+    const mSteel = stdMat(0x7a8899, 0x000000, { metalness: 0.6, roughness: 0.45 });
+    const mAccent = stdMat(0xffb84a, 0x5a2a0a, { metalness: 0.4, roughness: 0.55 });
+    const mRust = stdMat(0x8a4a2a, 0x000000, { roughness: 0.9, metalness: 0.1 });
+    const mGlow = stdMat(0x22d3ee, 0x0aa0c0, { emissiveIntensity: 1.4 });
+    // 胸部主舱（重装甲 + 散热格栅）
+    const chest = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.64, 1.15), mBody);
     chest.position.y = 0.82;
     g.add(chest);
-    // 腹部（尾部隆起）
-    const abdomen = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.55, 1.0), mDark);
-    abdomen.position.set(0, 0.6, -0.95);
-    abdomen.rotation.x = 0.35;
-    g.add(abdomen);
-    // 头部传感器
-    const head = box(0.4, 0.24, 0.4, mDark);
-    head.position.set(0, 1.05, 0.75);
+    const chestPlate = box(0.9, 0.4, 0.1, mDark);
+    chestPlate.position.set(0, 0.84, 0.58);
+    g.add(chestPlate);
+    for (const s of [-1, 1]) {
+      const sideGrate = box(0.04, 0.24, 0.4, mSteel);
+      sideGrate.position.set(s * 0.77, 0.82, 0);
+      g.add(sideGrate);
+    }
+    // 腹部（节状甲壳：3 段依次抬升）
+    const segs = [
+      { x: 0, y: 0.62, z: -0.7, sx: 0.9, sy: 0.5, sz: 0.72, r: 0.18 },
+      { x: 0, y: 0.58, z: -1.12, sx: 0.72, sy: 0.42, sz: 0.6, r: 0.3 },
+      { x: 0, y: 0.5, z: -1.45, sx: 0.5, sy: 0.3, sz: 0.42, r: 0.4 },
+    ];
+    for (const seg of segs) {
+      const m = box(seg.sx, seg.sy, seg.sz, mDark);
+      m.position.set(seg.x, seg.y, seg.z);
+      m.rotation.x = seg.r;
+      g.add(m);
+    }
+    // 头部传感器（装甲 + 双主眼 + 两侧小眼 + 天线）
+    const head = box(0.46, 0.26, 0.44, mDark);
+    head.position.set(0, 1.06, 0.78);
     g.add(head);
-    const eye = box(0.22, 0.08, 0.08, stdMat(0x7df9ff, 0x22d3ee, { emissiveIntensity: 0.9 }));
-    eye.position.set(0, 1.05, 0.96);
-    g.add(eye);
-    // 核心（胸部前上方）
-    const core = box(0.36, 0.18, 0.1, new THREE.MeshStandardMaterial({
-      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.95,
+    const headPlate = box(0.5, 0.08, 0.1, mRust);
+    headPlate.position.set(0, 1.16, 0.98);
+    g.add(headPlate);
+    for (const s of [-1, 1]) {
+      const eye = box(0.16, 0.07, 0.06, mGlow);
+      eye.position.set(s * 0.12, 1.08, 1.0);
+      g.add(eye);
+    }
+    const eyeCenter = box(0.14, 0.1, 0.06, stdMat(0xff4455, 0xff2244, { emissiveIntensity: 1.1 }));
+    eyeCenter.position.set(0, 1.12, 1.0);
+    g.add(eyeCenter);
+    const antenna1 = box(0.02, 0.26, 0.02, mSteel);
+    antenna1.position.set(-0.12, 1.32, 0.85);
+    antenna1.rotation.z = -0.25;
+    const antenna2 = box(0.02, 0.22, 0.02, mSteel);
+    antenna2.position.set(0.12, 1.3, 0.85);
+    antenna2.rotation.z = 0.25;
+    g.add(antenna1, antenna2);
+    // 核心（胸舱前上方，发光）
+    const core = box(0.34, 0.16, 0.06, new THREE.MeshStandardMaterial({
+      color: 0xff4455, emissive: 0xff2244, emissiveIntensity: 1.2,
     }));
-    core.position.set(0, 0.95, 0.55);
+    core.position.set(0, 0.98, 0.56);
     core.rotation.x = -0.2;
     g.add(core);
-    // 六条腿：60° 均匀环绕胸部（两段式 + 足尖）
+    const coreRing = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.03, 6, 16), mSteel);
+    coreRing.position.set(0, 0.98, 0.55);
+    coreRing.rotation.x = -0.2;
+    g.add(coreRing);
+    // 六条腿：60° 均匀环绕（两段式 + 利爪足尖 + 关节护甲）
     const legs = [];
     for (let i = 0; i < 6; i++) {
       const ang = (i * 60 - 90) * Math.PI / 180; // -90° 起顺时针
       const pivot = new THREE.Group();
       pivot.position.set(Math.cos(ang) * 0.8, 0.74, Math.sin(ang) * 0.8);
       pivot.rotation.y = ang;
-      const thigh = box(0.1, 0.55, 0.1, mSteel);
+      const thigh = box(0.12, 0.55, 0.12, mBody);
       thigh.position.set(0.34, -0.26, 0);
       thigh.rotation.z = -0.62;
-      const knee = box(0.12, 0.1, 0.12, mAccent);
+      const thighPad = box(0.16, 0.1, 0.14, mDark);
+      thighPad.position.set(0.3, -0.18, 0);
+      thighPad.rotation.z = -0.62;
+      const knee = box(0.14, 0.12, 0.14, mRust);
       knee.position.set(0.56, -0.52, 0);
-      const shin = box(0.08, 0.46, 0.08, mDark);
+      const kneeSpike = box(0.06, 0.14, 0.06, mAccent);
+      kneeSpike.position.set(0.6, -0.5, 0);
+      const shin = box(0.1, 0.46, 0.1, mDark);
       shin.position.set(0.72, -0.72, 0);
       shin.rotation.z = 0.3;
-      const foot = box(0.1, 0.06, 0.24, mSteel);
-      foot.position.set(0.86, -0.94, 0);
-      pivot.add(thigh, knee, shin, foot);
+      const shinSpike = box(0.04, 0.3, 0.04, mSteel);
+      shinSpike.position.set(0.8, -0.62, 0);
+      shinSpike.rotation.z = 0.3;
+      // 利爪足尖（双爪）
+      const claw1 = box(0.05, 0.06, 0.2, mSteel);
+      claw1.position.set(0.84, -0.96, 0.06);
+      const claw2 = box(0.05, 0.06, 0.2, mSteel);
+      claw2.position.set(0.84, -0.96, -0.06);
+      pivot.add(thigh, thighPad, knee, kneeSpike, shin, shinSpike, claw1, claw2);
       g.add(pivot);
       legs.push(pivot);
     }
@@ -877,7 +1055,7 @@ import * as THREE from './three.module.min.js';
     const mounts = [];
     const mountPos = [[-0.95, 1.02, 0.1], [0.95, 1.02, 0.1], [0, 1.5, 0]];
     for (const [mx, my, mz] of mountPos) {
-      const pad = box(0.4, 0.08, 0.3, mSteel);
+      const pad = box(0.42, 0.1, 0.32, mSteel);
       pad.position.set(mx, my - 0.06, mz);
       g.add(pad);
       const pivot = new THREE.Group();
@@ -885,6 +1063,15 @@ import * as THREE from './three.module.min.js';
       g.add(pivot);
       mounts.push(pivot);
     }
+    // 战损：腹部弹孔补丁 + 铁链
+    const patch = box(0.16, 0.12, 0.02, mRust);
+    patch.position.set(0.3, 0.66, -0.75);
+    patch.rotation.y = 0.3;
+    g.add(patch);
+    const chain = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.02, 6, 10), mSteel);
+    chain.position.set(-0.5, 0.7, -0.9);
+    chain.rotation.y = 0.4;
+    g.add(chain);
     g.userData = { type: 'spider', legs, chest, core, mounts, gait: 0 };
   }
 
