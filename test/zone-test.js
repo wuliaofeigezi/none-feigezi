@@ -32,6 +32,7 @@ const game = new Game(io, 'room_zone', { mode: 'zone', maxPlayers: 8, matchMinut
 game.start([{ socketId: 'A', name: 'Alice', sessionId: 'sid_alice' }]);
 clearInterval(game.timer);
 game.timer = null;
+game.onMechSelect('A', { index: 0 }); // 开局局内选择机甲出生
 
 assert(game.mode === 'zone', '模式应为占点');
 assert(game.zone.r === 4.5, '占领区半径 4.5');

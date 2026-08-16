@@ -244,6 +244,8 @@ class Game {
     socket.on('vote', h.vote);
     socket.on('ping', h.ping);
     socket.on('suicide', h.suicide);
+    socket.on('lock', h.lock);
+    socket.on('mech:select', h.mechSelect);
     socket.on('disconnect', h.disconnect);
   }
 
@@ -285,13 +287,14 @@ class Game {
       score: 0,
       kills: 0,
       deaths: 0,
-      alive: true,
+      alive: false,      // 开局先选择机甲（局内选择），选定后才出生
       respawnAt: 0,
       respawnIn: 0,
       grounded: true,
       input: { fwd: 0, strafe: 0, jump: false, fire: false },
       mechs,           // 机库配置 [{type, weapons}, ...]（死斗=两次生命）
       mechIndex: 0,    // 当前出战机甲下标
+      usedMechs: this.mode === 'duel' ? new Set() : null, // 死斗：已损毁机甲下标
       lives: this.mode === 'duel' ? mechs.length : Infinity,
       burns: new Map(),// 激光灼烧：ownerId -> {dps, endsAt, part, legIndex}
       lockId: null,    // 武器索敌锁定目标 socketId（客户端上报，服务端校验）
@@ -418,24 +421,25 @@ class Game {
     p.lockId = tid;
   }
 
-  // 局内选择下一台机甲（死亡后可换机甲再部署）
-  // 死斗：只能选尚未使用的机甲（index >= mechIndex）；其他模式：可在机库机甲间任意切换
+  // 局内选择机甲（开局与死亡后均可）：选定即出生
+  // 死斗：只能选未损毁的机甲；其他模式：可在机库机甲间任意切换
   onMechSelect(playerId, data) {
     const p = this.players.get(playerId);
     if (!this.active || !p || !p.connected || !data) return;
     const idx = parseInt(data.index, 10);
     if (!Number.isInteger(idx) || idx < 0 || idx >= p.mechs.length) return;
-    if (this.mode === 'duel' && idx < p.mechIndex) return; // 已损毁的机甲不可再选
+    if (this.mode === 'duel' && p.usedMechs && p.usedMechs.has(idx)) return; // 已损毁的机甲不可再选
     if (p.alive) return; // 仅死亡等待复活时可换机甲
     p.mechIndex = idx;
-    if (this.mode === 'duel') p.lives = Math.max(0, p.mechs.length - p.mechIndex);
-    p.respawnAt = Date.now(); // 立即以所选机甲复活
+    if (this.mode === 'duel') p.lives = Math.max(0, p.mechs.length - (p.usedMechs ? p.usedMechs.size : 0));
+    this.respawn(p); // 直接以所选机甲出生
     this.sendMe(p);
     console.log(`[neon-arena][${this.roomId}] [mech] ${p.name} 选择机甲 ${p.mechIndex}（${p.mechs[idx].type}）`);
   }
 
   // 返回当前有效锁定目标（或 null）
-  validLock(p) {    if (!p.lockId) return null;
+  validLock(p) {
+    if (!p.lockId) return null;
     const t = this.players.get(p.lockId);
     if (!t || !t.alive || !t.connected) { p.lockId = null; return null; }
     if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return null; }
@@ -444,9 +448,11 @@ class Game {
     return t;
   }
 
-  // 锁定命中时的模块判定：50% 腿（随机存活腿）/ 50% 胸部
+  // 锁定命中模块判定：优先可造成伤害的模块（无存活腿则打胸部）
   lockedModule(t) {
-    const part = Math.random() < 0.5 ? MODULE_LEG : MODULE_CHEST;
+    let aliveLegs = 0;
+    for (const h of t.mech.legs) if (h > 0) aliveLegs++;
+    const part = (aliveLegs > 0 && Math.random() < 0.5) ? MODULE_LEG : MODULE_CHEST;
     return { part, legIndex: part === MODULE_LEG ? this.randomAliveLeg(t) : null };
   }
 
@@ -640,7 +646,11 @@ class Game {
     // 2) 全灭判定：一方所有人都用完机甲（出局）→ 另一方获胜
     const teamActive = [false, false];
     for (const p of this.players.values()) {
-      if (p.mechIndex < p.mechs.length) teamActive[p.team] = true;
+      if (this.mode === 'duel') {
+        if (p.usedMechs.size < p.mechs.length) teamActive[p.team] = true;
+      } else {
+        teamActive[p.team] = true;
+      }
     }
     if (!teamActive[0] && !teamActive[1]) return; // 同归于尽：等时间到按击杀判定
     if (!teamActive[0]) { d.winnerTeam = 1; this.endGame(1); return; }
@@ -693,6 +703,8 @@ class Game {
       }
       if (!p.alive) {
         if (p.respawnAt && now >= p.respawnAt) this.respawn(p);
+        // 开局选择机甲超时（8s）未选：自动以默认机甲出生
+        else if (!p.respawnAt && now - this.startedAt > 8000) this.respawn(p);
         continue;
       }
       this.physics(p, dt);
@@ -881,7 +893,8 @@ class Game {
         gz = origin.z + dir.z * tGround;
       }
       const ang = Math.random() * Math.PI * 2;
-      const rad = Math.random() * w.spread * Math.max(5, Math.hypot(gx - origin.x, gz - origin.z));
+      // 锁定时无散布（精准命中锁定目标）；未锁定时按比例散布
+      const rad = locked ? 0 : Math.random() * w.spread * Math.max(5, Math.hypot(gx - origin.x, gz - origin.z));
       const tx = gx + Math.cos(ang) * rad;
       const tz = gz + Math.sin(ang) * rad;
       const dist = Math.hypot(tx - origin.x, tz - origin.z);
@@ -1033,10 +1046,10 @@ class Game {
       cause,
     });
     if (this.mode === 'duel') {
-      // 死斗：消耗一台机甲，两台都用完则出局不可复活
-      victim.mechIndex++;
-      victim.lives = Math.max(0, victim.mechs.length - victim.mechIndex);
-      victim.respawnAt = (victim.mechIndex < victim.mechs.length) ? now + this.cfg.respawnMs : 0;
+      // 死斗：标记该机甲已损毁；仍有剩余机甲则等待复活（可用局内选择换机甲），否则出局观战
+      victim.usedMechs.add(victim.mechIndex);
+      victim.lives = Math.max(0, victim.mechs.length - victim.usedMechs.size);
+      victim.respawnAt = (victim.usedMechs.size < victim.mechs.length) ? now + this.cfg.respawnMs : 0;
       this.emit('duel:lives', { id: victim.id, lives: victim.lives, mechIndex: victim.mechIndex });
     } else {
       victim.respawnAt = now + this.cfg.respawnMs;
@@ -1045,6 +1058,12 @@ class Game {
   }
 
   respawn(p) {
+    // 死斗：自动挑一台未损毁的机甲（局内选择可覆盖）
+    if (this.mode === 'duel' && p.usedMechs) {
+      for (let i = 0; i < p.mechs.length; i++) {
+        if (!p.usedMechs.has(i)) { p.mechIndex = i; break; }
+      }
+    }
     const mechCfg = p.mechs[Math.min(p.mechIndex, p.mechs.length - 1)] || p.mechs[0];
     this.applyMech(p, mechCfg);
     const s = this.pickSpawn(isTeamMode(this.mode) ? p.team : null);
@@ -1251,7 +1270,8 @@ class Game {
       weapons: this.weaponStateToJSON(p, now),
       lives: this.mode === 'duel' ? p.lives : null,
       mechIndex: this.mode === 'duel' ? p.mechIndex : null,
-      mechChoices: p.mechs.map((m, i) => ({ type: m.type, index: i })),
+      mechChoices: p.mechs.map((m, i) => ({ type: m.type, index: i }))
+        .filter((c) => !(this.mode === 'duel' && p.usedMechs && p.usedMechs.has(c.index))),
       score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
       alive: p.alive, respawnIn: Math.max(0, p.respawnAt - now),
     };

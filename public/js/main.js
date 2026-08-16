@@ -122,13 +122,10 @@ import * as THREE from './three.module.min.js';
   let hangarRenderers = [];      // 机库 3D 预览 renderer
   let hangarModels = [null, null];
   let selectedMode = 'duel';     // duel(死斗) | ctf(战旗) | zone(占点)
-  let primaryIdx = 0;            // 主战机甲（0=人形 1=蜘蛛；死斗先出主战，其他模式只出主战）
   let mechConfigs = [
     { type: 'humanoid', weapons: ['gau12', 'gau12', 'gau12', 'gau12'] },
     { type: 'spider', weapons: ['gau12', 'gau12', 'gau12'] },
   ];
-  // 出战配置：主战在前（死斗先出主战；其他模式只出主战）
-  function battleMechs() { return primaryIdx === 0 ? mechConfigs : [mechConfigs[1], mechConfigs[0]]; }
   // ===== 武器视觉状态 =====
   let tracerPool = [];           // 机炮曳光
   let beamMeshes = [];           // 激光束
@@ -353,7 +350,7 @@ import * as THREE from './three.module.min.js';
     roomListEl.querySelectorAll('.room-row').forEach((el) => {
       el.addEventListener('click', () => {
         myName = (lobbyName.value || '玩家').trim().slice(0, 16);
-        socket.emit('room:join', { code: el.dataset.code, name: myName, sessionId: getSessionId(), mechs: battleMechs() });
+        socket.emit('room:join', { code: el.dataset.code, name: myName, sessionId: getSessionId(), mechs: mechConfigs });
       });
     });
   }
@@ -423,25 +420,7 @@ import * as THREE from './three.module.min.js';
         });
       });
     }
-    // 主战机甲选择（点击机甲卡）
-    const cards = [mechCard0, mechCard1];
-    const setPrimaryBadge = () => {
-      const names = ['🤖 人形战斗机器人', '🕷 蜘蛛机器人'];
-      cards.forEach((c, i) => {
-        if (!c) return;
-        c.classList.toggle('primary', i === primaryIdx);
-        const b2 = c.querySelector('.mech-name');
-        if (b2) b2.innerHTML = names[i] + (i === primaryIdx ? '<span class="prim-badge">主战</span>' : '');
-      });
-    };
-    cards.forEach((card, idx) => {
-      if (!card) return;
-      card.addEventListener('click', () => {
-        primaryIdx = idx;
-        setPrimaryBadge();
-      });
-    });
-    setPrimaryBadge();
+    // 主战机甲选择已移除：机甲改为局内选择（开局/死亡后弹出选择面板）
     renderWeaponSlots(0);
     renderWeaponSlots(1);
     setupHangarPreviews();
@@ -452,7 +431,7 @@ import * as THREE from './three.module.min.js';
         playerName: myName,
         sessionId: getSessionId(),
         mode: selectedMode,
-        mechs: battleMechs(),
+        mechs: mechConfigs,
       });
     });
     // 机库预览独立渲染循环（修复电脑端预览不显示：不再依赖对局内 frame 循环）
@@ -805,7 +784,7 @@ import * as THREE from './three.module.min.js';
 
   // 索敌：准星附近（屏幕 70px 内）最近的可锁定敌人；未瞄到敌人时保持当前锁定
   function updateLockTarget() {
-    if (!started || !me || !me.alive || pauseOpen || ctfVoting()) {
+    if (!started || !me || !me.alive || pauseOpen || ctfVoting() || mechSelecting()) {
       if (lockTargetId) { lockTargetId = null; sendLock(null); }
       return;
     }
@@ -819,7 +798,7 @@ import * as THREE from './three.module.min.js';
       center.copy(rp.target).add({ x: 0, y: 1.1, z: 0 });
       const v = projectToScreen(center);
       if (v.behind) continue;
-      if (Math.hypot(v.x - cx0, v.y - cy0) > 70) continue;
+      if (Math.hypot(v.x - cx0, v.y - cy0) > 90) continue;
       const d3 = Math.hypot(rp.target.x - myPos.x, rp.target.y - myPos.y, rp.target.z - myPos.z);
       if (d3 > 60 || d3 >= bestD3) continue;
       bestD3 = d3;
@@ -934,16 +913,16 @@ import * as THREE from './three.module.min.js';
     if (lockBox) lockBox.classList.add('hidden');
   }
 
-  // ---------- 局内选择机甲（死亡后换机甲再部署） ----------
+  // ---------- 局内选择机甲（开局/死亡后可换机甲再部署；选择期间不可移动攻击） ----------
+  function mechSelecting() {
+    return !!(mechSelect && !mechSelect.classList.contains('hidden'));
+  }
   function updateMechSelect(m) {
     const el = mechSelect, btns = msButtons;
     if (!el || !btns) return;
     if (m.alive) { el.classList.add('hidden'); return; }
-    let list = (m.mechChoices || []).slice();
-    if (gameMode === 'duel' && m.mechIndex != null) {
-      list = list.filter((c) => c.index >= m.mechIndex); // 死斗只能选未损毁的
-    }
-    if (list.length <= 1) { el.classList.add('hidden'); return; }
+    const list = (m.mechChoices || []).slice(); // 服务端已过滤死斗中已损毁的机甲
+    if (!list.length) { el.classList.add('hidden'); return; }
     el.classList.remove('hidden');
     btns.innerHTML = list.map((c) =>
       '<button class="btn ms-btn" data-i="' + c.index + '">' +
@@ -1150,7 +1129,7 @@ import * as THREE from './three.module.min.js';
     if (!open) stopSuicideHold();
   }
   function startSuicideHold() {
-    if (!started || !me || !me.alive || pauseOpen || ctfVoting()) return;
+    if (!started || !me || !me.alive || pauseOpen || ctfVoting() || mechSelecting()) return;
     suicideHeldAt = performance.now();
     suicideBar.classList.remove('hidden');
     clearInterval(suicideTimer);
@@ -1524,13 +1503,17 @@ import * as THREE from './three.module.min.js';
       if (gameMode === 'duel' && m.lives === 0) {
         deathText.textContent = '💥 机甲全部损毁，进入观战';
         respawnText.textContent = '鼠标移动环视战场';
+      } else if (!m.respawnIn) {
+        // 开局选择机甲阶段
+        deathText.textContent = '选择出战机甲';
+        respawnText.textContent = '';
       } else {
         deathText.textContent = '你被 ' + (lastKiller || '???') + ' 击杀';
         respawnIn = m.respawnIn || 3000;
         respawnAtLocal = performance.now() + respawnIn;
       }
       deathOverlay.classList.remove('hidden');
-      updateMechSelect(m); // 死亡后可选择下一台机甲
+      updateMechSelect(m); // 死亡/开局可选择机甲
     }
     if (!wasAlive && m.alive) {
       myPos.x = m.x; myPos.y = m.y; myPos.z = m.z;
@@ -1774,7 +1757,7 @@ import * as THREE from './three.module.min.js';
     scene.add(zoneRing);
 
     renderer.domElement.addEventListener('click', () => {
-      if (isTouch || !started || ctfVoting() || pauseOpen || document.pointerLockElement === renderer.domElement) return;
+      if (isTouch || !started || ctfVoting() || pauseOpen || mechSelecting() || document.pointerLockElement === renderer.domElement) return;
       if (performance.now() - lastLockFail < 2000) return;
       try { renderer.domElement.requestPointerLock(); } catch (e) { /* ignore */ }
     });
@@ -2067,12 +2050,12 @@ import * as THREE from './three.module.min.js';
       spectateCamera(dt);
       if (selfModel) selfModel.visible = false;
     } else {
-      // 第三人称相机（跟随机甲后方，防穿墙；稍远稍高避免遮挡视野）
-      const camDist = 5.1, camHgt = 2.3;
+      // 和平精英式第三人称：相机更高更靠后、看向玩家前上方，机甲位于画面下部中央，不遮挡视野
+      const camDist = 5.6, camHgt = 3.2;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       const camPos = collideCamera(
-        px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.7, pz + Math.cos(yaw) * cpc * camDist,
-        px, py + 1.4, pz
+        px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.8, pz + Math.cos(yaw) * cpc * camDist,
+        px, py + 1.5, pz
       );
       camera.position.lerp(camPos, Math.min(1, 14 * dt));
       if (camShake > 0) {
@@ -2080,7 +2063,7 @@ import * as THREE from './three.module.min.js';
         camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
         camShake = Math.max(0, camShake - dt * 10);
       }
-      camera.lookAt(px - Math.sin(yaw) * 5, py + 1.5 + spc * 5, pz - Math.cos(yaw) * 5);
+      camera.lookAt(px - Math.sin(yaw) * 6, py + 2.0 + spc * 6, pz - Math.cos(yaw) * 6);
 
       // ===== 自机机甲模型（第三人称可见） =====
       if (selfModel) {
@@ -2163,7 +2146,7 @@ import * as THREE from './three.module.min.js';
     if (e.code === 'KeyJ') stopSuicideHold();
   });
   document.addEventListener('mousedown', (e) => {
-    if (isTouch || e.button !== 0 || !started || ctfVoting() || pauseOpen) return;
+    if (isTouch || e.button !== 0 || !started || ctfVoting() || pauseOpen || mechSelecting()) return;
     fire = true;
     if (performance.now() - lastShotAt >= FIRE_CD) {
       lastShotAt = performance.now();
@@ -2172,7 +2155,7 @@ import * as THREE from './three.module.min.js';
   });
   document.addEventListener('mouseup', (e) => { if (!isTouch && e.button === 0) fire = false; });
   document.addEventListener('mousemove', (e) => {
-    if (isTouch || !started || ctfVoting() || pauseOpen) return;
+    if (isTouch || !started || ctfVoting() || pauseOpen || mechSelecting()) return;
     let dx = 0, dy = 0;
     if (document.pointerLockElement === renderer.domElement) {
       // CS:GO 模式：指针锁定，原始位移增量，指哪转哪
@@ -2305,7 +2288,7 @@ import * as THREE from './three.module.min.js';
     const open = roomList.find((r) => r.state === 'lobby' && !r.hasPassword)
       || roomList.find((r) => !r.hasPassword);
     if (open) {
-      socket.emit('room:join', { code: open.code, name: myName, sessionId: getSessionId(), mechs: battleMechs() });
+      socket.emit('room:join', { code: open.code, name: myName, sessionId: getSessionId(), mechs: mechConfigs });
     } else {
       showToast('暂无可加入的房间，试试创建一个');
     }
@@ -2362,8 +2345,8 @@ import * as THREE from './three.module.min.js';
   // 输入上报（死亡/投票/暂停期间持续上报零输入；复活瞬间输入立即生效）
   setInterval(() => {
     if (!socket || !started || !me) return;
-    if (ctfVoting() || pauseOpen) {
-      // 投票/暂停期间：人物静止、不可移动/开火/跳跃
+    if (ctfVoting() || pauseOpen || mechSelecting()) {
+      // 投票/暂停/选择机甲期间：人物静止、不可移动/开火/跳跃
       socket.emit('input', { fwd: 0, strafe: 0, jump: false, fire: false, yaw, pitch });
       return;
     }

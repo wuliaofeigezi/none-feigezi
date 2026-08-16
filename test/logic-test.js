@@ -42,6 +42,9 @@ game.start([
 ]);
 clearInterval(game.timer);
 game.timer = null;
+// 开局需先在局内选择机甲（机甲改为局内选择）
+game.onMechSelect('A', { index: 0 });
+game.onMechSelect('B', { index: 0 });
 
 const pA = game.players.get('A');
 const pB = game.players.get('B');
@@ -130,17 +133,7 @@ while (!pB.alive && g1++ < 100) game.tick();
 assert(pB.alive, '应复活');
 assert(pB.mech.chest === pB.mech.chestMax && pB.mech.legs.every((h) => h === 100), '复活应满模块');
 
-// ---- 9. 血包：修复胸部（+25）与受损腿部 ----
-pA.mech.chest = 50;
-pA.mech.legs[0] = 60; // 受损未损毁
-place(pA, MAP.pickups[1].x, MAP.pickups[1].z);
-input(A, {});
-game.tick();
-console.log('吃血包后血量 chest:', pA.mech.chest, 'leg0:', pA.mech.legs[0]);
-assert(pA.mech.chest === 75, '血包应给胸部 +25');
-assert(pA.mech.legs[0] === 85, '血包应修复受损腿部 +25');
-
-// ---- 10. 边界 ----
+// ---- 9. 边界 ----
 place(pA, 200, 0);
 input(A, { fwd: 1, yaw: 0 });
 for (let i = 0; i < 5; i++) game.tick();
@@ -249,8 +242,7 @@ game.onMechSelect('A', { index: 1 }); // 选择蜘蛛
 game.tick(); // 到点复活
 assert(pA.alive && pA.mechType === 'spider' && pA.mech.legs.length === 6, '应换成蜘蛛满血复活');
 // 存活状态不可换机甲
-game.damageModule(pA, MODULE_CORE, 9999, 'B', Date.now());
-const typeBefore = pA.mechType;
+const typeBefore = pA.mechType; // pA 当前存活（蜘蛛）
 game.onMechSelect('A', { index: 0 });
 assert(pA.mechType === typeBefore, '存活状态不应允许换机甲');
 
@@ -264,19 +256,22 @@ duelGame.start([
 ]);
 clearInterval(duelGame.timer);
 duelGame.timer = null;
+// 死斗开局选机甲
+duelGame.onMechSelect('D', { index: 0 });
+duelGame.onMechSelect('E', { index: 0 });
 const pD = duelGame.players.get('D');
 const pE = duelGame.players.get('E');
 assert(pD.team !== pE.team, '死斗应分属两队');
 assert(pD.lives === 2 && pD.mechs.length === 2, '死斗应携带两台机甲（两次生命）');
-// 死亡一次 → 换第二台机甲
+// 死亡一次 → 标记该机甲损毁，自动出下一台未损毁机甲
 duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
-assert(!pD.alive && pD.mechIndex === 1 && pD.lives === 1, '死亡一次应消耗一台机甲');
+assert(!pD.alive && pD.usedMechs.has(0) && pD.lives === 1, '死亡一次应消耗一台机甲');
 pD.respawnAt = Date.now();
 duelGame.tick();
 assert(pD.alive && pD.mechType === 'spider', '第二台机甲应为蜘蛛');
-// 再死一次 → 出局不可复活
+// 再死一次 → 两台都用完出局不可复活
 duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
-assert(!pD.alive && pD.mechIndex === 2 && pD.lives === 0 && pD.respawnAt === 0, '两次死亡后应出局');
+assert(!pD.alive && pD.usedMechs.size === 2 && pD.lives === 0 && pD.respawnAt === 0, '两次死亡后应出局');
 // 全灭判定：D 出局后只剩 E 队 → E 队获胜
 duelGame.tick();
 assert(duelGame.duel.winnerTeam === pE.team, '一方全灭应判另一方获胜');

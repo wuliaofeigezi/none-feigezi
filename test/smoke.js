@@ -62,6 +62,16 @@ function once(s, ev, ms) {
   assert(welcomeA.self.weapons.length === 4, '人形应 4 武器槽');
   console.log('开局:', welcomeA.self.name, '+', welcomeB.self.name, '| 机甲:', welcomeA.self.mechType, '| 地图盒子数:', welcomeA.map.boxes.length);
 
+  // ---- 局内选择机甲（机甲改为局内选择，选定后出生） ----
+  const meAP = once(a, 'me');
+  const meBP = once(b, 'me');
+  a.emit('mech:select', { index: 0 });
+  b.emit('mech:select', { index: 0 });
+  const meA = await meAP;
+  const meB = await meBP;
+  assert(meA.alive && meB.alive, '选择机甲后应出生');
+  console.log('已选择机甲出战:', meA.mechType, '+', meB.mechType);
+
   // ---- 对打 4 秒（站桩射击，避免游走误吃血包导致断言抖动） ----
   let statesA = 0, statesB = 0, killsSeen = 0;
   let lastMe1 = welcomeA.self;
@@ -84,7 +94,7 @@ function once(s, ev, ms) {
 
   const gotState = await new Promise((r) => a.once('state', r));
   console.log('血包数量:', gotState.pickups.length, '| 玩家数:', gotState.players.length);
-  if (!(statesA > 40 && statesB > 40 && gotState.pickups.length === 6)) {
+  if (!(statesA > 40 && statesB > 40 && gotState.pickups.length === 0)) {
     console.log('\n❌ 冒烟基础异常');
     process.exit(1);
   }
