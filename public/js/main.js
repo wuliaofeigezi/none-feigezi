@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260902 · 新机甲守护者(量子罩Q)+动画优化(后坐力/呼吸/步态)+修复机炮曳光不显示/弹道池索引错位 · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260903 · 新增小地图(右上角)+按住M打开大地图 · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -228,6 +228,7 @@ import * as THREE from './three.module.min.js';
     lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash'),
     teamAlive = $('teamAlive'), taRed = $('taRed'), taBlue = $('taBlue'), taScore = $('taScore'), taRound = $('taRound'),
     kdaOverlay = $('kdaOverlay'), kdaList = $('kdaList'),
+    minimap = $('minimap'), bigMap = $('bigMap'), bigMapCanvas = $('bigMapCanvas'),
     mechSelect = $('mechSelect'), msButtons = $('msButtons'),
     msWeapons = $('msWeapons'), msCountdown = $('msCountdown'), msConfirm = $('msConfirm');
 
@@ -1792,6 +1793,95 @@ import * as THREE from './three.module.min.js';
     shieldRow.classList.toggle('active', !!s.active);
   }
 
+  // ===== 小地图 / 大地图 =====
+  // 共享绘制：把世界坐标（-half..half）映射到画布，画地形轮廓 + 玩家标记
+  // box 中心坐标+尺寸 → 画布矩形（俯视 x→右，z→上）
+  function drawMap(ctx, w, h, selfX, selfZ, selfYaw, showBuildings) {
+    const half = (mapData ? mapData.size.x : 90) / 2;
+    const s = w / (half * 2); // 世界→画布比例
+    const px = (wx) => (wx + half) * s;
+    const pz = (wz) => h - (wz + half) * s;
+    // 背景
+    ctx.clearRect(0, 0, w, h);
+    // 地形轮廓（障碍物俯视矩形）
+    if (mapData && mapData.boxes) {
+      for (const b of mapData.boxes) {
+        // 可进入楼房只画外墙（building 墙是薄条，合并不了，直接画所有即可）
+        const x = px(b.x - b.sx / 2), y = pz(b.z + b.sz / 2), bw = b.sx * s, bh = b.sz * s;
+        ctx.fillStyle = b.building !== undefined
+          ? (b.roof ? 'rgba(40,90,60,.85)' : 'rgba(125,249,255,.28)')
+          : 'rgba(60,80,140,.4)';
+        ctx.fillRect(x, y, bw, bh);
+        if (b.building === undefined) {
+          ctx.strokeStyle = 'rgba(150,190,255,.3)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x, y, bw, bh);
+        }
+      }
+    }
+    // 边界框
+    ctx.strokeStyle = 'rgba(125,249,255,.6)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, w - 2, h - 2);
+    // 玩家标记
+    for (const sp of lastPlayers) {
+      if (!sp.alive && sp.id !== (me && me.id)) continue;
+      const x = px(sp.x), y = pz(sp.z);
+      const isMe = me && sp.id === me.id;
+      let col;
+      if (isMe) col = '#ffffff';
+      else if ((gameMode === 'duel' || gameMode === 'ctf') && me && sp.team === me.team) col = '#5b8cff';
+      else col = sp.color || '#ff5b6e';
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(x, y, isMe ? 5 : 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      if (isMe) {
+        // 自己：朝向指示线
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        const len = 10;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - Math.sin(selfYaw) * len, y + Math.cos(selfYaw) * len);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // 小地图：每帧调用（轻量）
+  function drawMinimap() {
+    if (!minimap) return;
+    const ctx = minimap.getContext('2d');
+    const w = minimap.width, h = minimap.height;
+    drawMap(ctx, w, h, myPos.x, myPos.z, yaw, false);
+  }
+
+  // 大地图：按住 M 时显示（全屏，更大比例 + 显示楼房/出生点）
+  function drawBigMap() {
+    if (!bigMapCanvas) return;
+    const ctx = bigMapCanvas.getContext('2d');
+    const w = bigMapCanvas.width, h = bigMapCanvas.height;
+    drawMap(ctx, w, h, myPos.x, myPos.z, yaw, true);
+    // 出生点标记
+    if (mapData && mapData.spawns) {
+      const half = mapData.size.x / 2;
+      const s = w / (half * 2);
+      const px = (wx) => (wx + half) * s;
+      const pz = (wz) => h - (wz + half) * s;
+      ctx.fillStyle = 'rgba(255,255,255,.25)';
+      mapData.spawns.forEach((sp) => {
+        ctx.beginPath();
+        ctx.arc(px(sp.x), pz(sp.z), 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+  }
+
+  // 玩家位置缓存（供小地图/大地图绘制）
+  let lastPlayers = [];
+  function cachePlayers(players) { lastPlayers = players || []; }
+
   function updateWeaponHud(m) {
     if (!weaponHud || !m || !m.weapons) return;
     const rows = m.weapons.map((w) => {
@@ -2179,6 +2269,7 @@ import * as THREE from './three.module.min.js';
     kdaData = payload.players.map((p) => ({
       id: p.id, name: p.name, kills: p.kills || 0, deaths: p.deaths || 0, assists: p.assists || 0,
     }));
+    cachePlayers(payload.players);
     if (kdaOverlay && !kdaOverlay.classList.contains('hidden')) renderKdaOverlay();
     // 同步自身分数/战绩 + 服务器权威校正
     if (me) {
@@ -3164,6 +3255,8 @@ import * as THREE from './three.module.min.js';
     }
 
     renderer.render(scene, camera);
+    drawMinimap(); // 小地图（每帧）
+    if (bigMap && !bigMap.classList.contains('hidden')) drawBigMap(); // 大地图持续刷新
   }
 
   // =========================================================
@@ -3178,6 +3271,13 @@ import * as THREE from './three.module.min.js';
       kdaOverlay.classList.remove('hidden');
       renderKdaOverlay();
     }
+    if (e.code === 'KeyM' && started) {
+      e.preventDefault();
+      if (bigMap && bigMap.classList.contains('hidden')) {
+        bigMap.classList.remove('hidden');
+        drawBigMap();
+      }
+    }
     if (e.code === 'Escape' && started) {
       e.preventDefault();
       setPause(!pauseOpen);
@@ -3188,6 +3288,7 @@ import * as THREE from './three.module.min.js';
     keys[e.code] = false;
     if (e.code === 'KeyJ') stopSuicideHold();
     if (e.code === 'Tab' && kdaOverlay) kdaOverlay.classList.add('hidden');
+    if (e.code === 'KeyM' && bigMap) bigMap.classList.add('hidden');
   });
   document.addEventListener('mousedown', (e) => {
     if (isTouch || e.button !== 0 || !started || ctfVoting() || pauseOpen || mechSelecting()) return;

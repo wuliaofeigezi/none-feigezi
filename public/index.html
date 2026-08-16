@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260902"/>
+<link rel="stylesheet" href="css/style.css?v=20260903"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -148,6 +148,12 @@
   .kda-row .d{color:#ff6b8a;text-align:center;}
   .kda-row .a{color:#ffd98a;text-align:center;}
 
+  /* ===== 小地图 / 大地图 ===== */
+  #minimap{position:absolute;right:14px;top:14px;width:180px;height:180px;border:1px solid rgba(125,249,255,.35);border-radius:10px;background:rgba(5,10,25,.6);pointer-events:none;z-index:6;}
+  #bigMap{position:absolute;inset:0;background:rgba(3,6,15,.88);display:flex;align-items:center;justify-content:center;z-index:9;}
+  #bigMapCanvas{width:min(92vh,92vw);height:min(92vh,92vw);border:1px solid #2b3a7a;border-radius:12px;background:#070d20;}
+  .bm-hint{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);color:#9fb3e8;font-size:13px;background:rgba(10,13,30,.8);padding:6px 16px;border-radius:20px;border:1px solid #2b3a7a;}
+
   /* ===== 机甲模块 HUD ===== */
   #moduleHud{position:absolute;left:14px;bottom:90px;width:210px;background:rgba(5,10,25,.72);border:1px solid rgba(125,249,255,.3);border-radius:10px;padding:8px 10px;pointer-events:none;}
   .mh-title{font-size:11px;color:#7dd3fc;margin-bottom:4px;}
@@ -290,6 +296,13 @@
     <div class="kda-head"><span>玩家</span><span>击杀</span><span>死亡</span><span>助攻</span></div>
     <div id="kdaList"></div>
   </div>
+  <!-- 小地图（右上角，实时） -->
+  <canvas id="minimap" width="220" height="220"></canvas>
+  <!-- 大地图（按 M 打开，松开关闭） -->
+  <div id="bigMap" class="hidden">
+    <canvas id="bigMapCanvas" width="800" height="800"></canvas>
+    <div class="bm-hint">大地图 · 松开 M 关闭</div>
+  </div>
   <div id="touchUI" class="hidden">
     <div id="joyBase"><div id="joyKnob"></div></div>
     <div id="fireBtn">开火</div>
@@ -399,7 +412,7 @@
     </div>
     <div id="roomList" class="room-list"></div>
     <div class="help" id="helpText">
-      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃 · <b>Q 守护者量子罩</b>（升起挡物理伤害，但无法移动）<br/>
+      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃 · <b>Q 守护者量子罩</b>（升起挡物理伤害，但无法移动）· <b>M 大地图</b><br/>
       <b>ESC</b> 打开菜单（可自杀）· <b>长按 J 3 秒</b> 也可自杀<br/>
       💡 腿部损毁会减速（人形 1 腿 -50%、2 腿 -80%；蜘蛛按 5%/25%/50%/80%/95% 递增、6 腿瘫痪），胸部耗尽后核心可能被击穿！
     </div>
@@ -464,8 +477,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260902"></script>
-<script src="js/neon-shared.js?v=20260902"></script>
-<script type="module" src="js/main.js?v=20260902"></script>
+<script src="js/socket.io.min.js?v=20260903"></script>
+<script src="js/neon-shared.js?v=20260903"></script>
+<script type="module" src="js/main.js?v=20260903"></script>
 </body>
 </html>
