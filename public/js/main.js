@@ -566,25 +566,23 @@ import * as THREE from './three.module.min.js';
     }));
     core.position.set(0, 1.4, 0.34);
     g.add(core);
-    // 头部 / 天线
-    const head = box(0.42, 0.34, 0.34, mDark);
-    head.position.y = 1.88;
-    g.add(head);
-    const visor = box(0.26, 0.12, 0.06, stdMat(0x7df9ff, 0x22d3ee, { emissiveIntensity: 0.9 }));
-    visor.position.set(0, 1.88, 0.18);
+    // 无头部：顶部观察窗
+    const dome = box(0.5, 0.14, 0.4, mDark);
+    dome.position.y = 1.8;
+    g.add(dome);
+    const visor = box(0.3, 0.08, 0.05, stdMat(0x7df9ff, 0x22d3ee, { emissiveIntensity: 0.9 }));
+    visor.position.set(0, 1.8, 0.21);
     g.add(visor);
-    const antenna = box(0.03, 0.22, 0.03, mSteel);
-    antenna.position.set(0.16, 2.14, 0);
-    const antennaTip = box(0.07, 0.07, 0.07, stdMat(0xff5c7a, 0xff2244, { emissiveIntensity: 0.9 }));
-    antennaTip.position.set(0.16, 2.27, 0);
-    g.add(antenna, antennaTip);
-    // 肩部装甲 + 4 战斗模块槽
+    // 肩部装甲 + 4 战斗模块槽：两侧各上下两个（上部落于肩膀上，下部落于肩膀侧）
     const mounts = [];
-    const mountPos = [[-0.7, 1.62, 0.2], [0.7, 1.62, 0.2], [-0.7, 1.62, -0.2], [0.7, 1.62, -0.2]];
+    const mountPos = [
+      [-0.72, 1.68, 0.14], [0.72, 1.68, 0.14],  // 上部：落于肩膀上
+      [-0.9, 1.38, 0], [0.9, 1.38, 0],          // 下部：落于肩膀侧
+    ];
     for (let i = 0; i < mountPos.length; i++) {
       const [mx, my, mz] = mountPos[i];
-      const pad = box(0.44, 0.1, 0.34, mSteel);
-      pad.position.set(mx, my - 0.1, mz);
+      const pad = box(0.42, 0.1, 0.32, mSteel);
+      pad.position.set(mx, my - 0.09, mz);
       g.add(pad);
       const pivot = new THREE.Group();
       pivot.position.set(mx, my, mz);
@@ -2031,10 +2029,13 @@ import * as THREE from './three.module.min.js';
   function inputStrafe() { return clamp((keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0) + joy.strafe, -1, 1); }
   function inputJump() { return !!keys['Space'] || (jumpQueuedAt && performance.now() - jumpQueuedAt < 200); }
 
-  // 本地预测倍率（与服务端 cfg/旗手惩罚保持一致，避免预测漂移导致视角闪回）
+  // 本地预测倍率（与服务端 cfg/旗手惩罚/机甲基础移速保持一致，避免预测漂移导致视角闪回）
   function localMoveMul() {
     let m = 1;
     if (me && me.carrying) m *= 0.5;                    // 旗手移速减半
+    if (me && me.mechType && NS.MECHS[me.mechType]) {
+      m *= NS.MECHS[me.mechType].moveMul || 1;          // 机甲基础移速（人形减缓75%）
+    }
     const card = ctfState && ctfState.applied;
     if (card && card.id === 'speed') m *= 1.5;          // 疾风
     else if (card && card.id === 'slow') m *= 0.75;     // 泥沼
@@ -2148,7 +2149,7 @@ import * as THREE from './three.module.min.js';
       if (selfModel) selfModel.visible = false;
     } else {
       // 和平精英式第三人称：相机高且远、看向玩家前上方，机甲位于画面下部中央
-      const camDist = 9.0, camHgt = 2.2;
+      const camDist = 11.0, camHgt = 2.2;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       let camPos = collideCamera(
         px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.45, pz + Math.cos(yaw) * cpc * camDist,
@@ -2166,7 +2167,7 @@ import * as THREE from './three.module.min.js';
         camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
         camShake = Math.max(0, camShake - dt * 10);
       }
-      camera.lookAt(px - Math.sin(yaw) * 10, py + 1.6 + spc * 8, pz - Math.cos(yaw) * 10);
+      camera.lookAt(px - Math.sin(yaw) * 12, py + 1.6 + spc * 8, pz - Math.cos(yaw) * 12);
 
       // ===== 自机机甲模型（第三人称可见） =====
       if (selfModel) {

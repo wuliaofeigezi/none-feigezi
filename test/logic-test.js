@@ -104,7 +104,7 @@ assert(Math.abs(pA.pos.y - 5) < 0.01 && pA.grounded, '应落在中央高台顶�
 
 // ---- 6. 箱顶自由行走（不卡边） ----
 input(A, { fwd: 1 });
-for (let i = 0; i < 30; i++) game.tick();
+for (let i = 0; i < 60; i++) game.tick(); // 人形减速后需更多 tick 走完箱顶
 assert(pA.pos.z < -6, '应能从箱顶走过并越过边缘（z 应 < -6）');
 
 // ---- 7. 机炮命中模块（弹体飞行不穿墙）：平射打胸部、压低枪口打腿部 ----

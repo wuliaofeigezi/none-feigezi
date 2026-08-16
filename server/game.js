@@ -752,7 +752,7 @@ class Game {
   }
 
   muzzle(p) {
-    const h = MECHS[p.mechType].chestHeight * 0.7;
+    const h = MECHS[p.mechType].chestHeight * 0.8;
     return { x: p.pos.x, y: p.pos.y + h, z: p.pos.z };
   }
 
@@ -1173,10 +1173,11 @@ class Game {
     // 重力
     p.vel.y -= this.cfg.gravity * dt;
     if (p.vel.y < -MAX_FALL) p.vel.y = -MAX_FALL;
-    // 腿部损毁减速 × 旗手惩罚
+    // 腿部损毁减速 × 旗手惩罚 × 机甲基础移速倍率
     const legMul = mechSpeedMul(p.mechType, p.legsDestroyed);
+    const baseMul = (MECHS[p.mechType] && MECHS[p.mechType].moveMul) || 1;
     const carrierMul = (this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_SPEED_MUL : 1;
-    const spd = this.cfg.moveSpeed * legMul * carrierMul;
+    const spd = this.cfg.moveSpeed * legMul * carrierMul * baseMul;
     // 水平速度（朝向由 yaw 决定）
     const sin = Math.sin(p.yaw), cos = Math.cos(p.yaw);
     const fx = -sin, fz = -cos;
