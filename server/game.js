@@ -61,6 +61,7 @@ const DUEL_CORE_RADIUS = 4.5;    // 核心判定半径
 const DUEL_DEPLOY_SEC = 10;      // 部署装置所需秒数
 const DUEL_ROUND_MS = 90 * 1000; // 每回合时长上限（到时按击杀数判定）
 const DUEL_ROUND_WINS = 13;      // 大局计分：CS 式先赢 13 回合获胜
+const DUEL_MAX_ROUNDS = 25;      // 回合数上限（防僵局：先到 13 的胜；25 回合后按回合胜场/击杀判定）
 
 // 武器索敌（锁定）：无距离限制（全图可锁），仅墙体阻隔 + 队友未锁时失败
 
@@ -695,6 +696,13 @@ class Game {
     const d = this.duel;
     if (!d || d.winnerTeam !== null) return;
     if (d.phase === 'roundOver') {
+      // 回合数上限（防僵局）：超过上限直接按回合胜场结束整场，胜负由 endGame 依 roundWins 统计
+      if (d.round >= DUEL_MAX_ROUNDS && d.roundWins[0] !== d.roundWins[1]) {
+        const w = d.roundWins[0] > d.roundWins[1] ? 0 : 1;
+        d.winnerTeam = w;
+        this.endGame(w);
+        return;
+      }
       if (now >= d.roundOverAt) this.startNextDuelRound(now);
       return;
     }
@@ -788,8 +796,8 @@ class Game {
     this.hits = [];
     // 全员退出/断线超时 → 直接结束对局，避免空房间泄漏
     if (this.players.size === 0) { this.endGame(); return; }
-    // 对局时长到点 → 结束
-    if (now - this.startedAt >= this.durationMs) { this.endGame(); return; }
+    // 对局时长到点 → 结束（死斗除外：回合制由「先赢 13 回合」决定胜负，不受时间上限约束）
+    if (this.mode !== 'duel' && now - this.startedAt >= this.durationMs) { this.endGame(); return; }
 
     if (this.mode === 'ctf') {
       const c = this.ctf;

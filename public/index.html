@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260827"/>
+<link rel="stylesheet" href="css/style.css?v=20260828"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -409,9 +409,10 @@
     <div id="roomSettings" class="room-settings hidden">
       <label>模式
         <select id="modeSelect">
-          <option value="ffa">🔫 死亡竞赛</option>
-          <option value="zone">🚩 占点模式</option>
+          <option value="duel">⚔ 团队死斗</option>
           <option value="ctf">🏳️ 夺旗卡牌赛</option>
+          <option value="zone">🚩 占点模式</option>
+          <option value="ffa">🔫 死亡竞赛</option>
         </select>
       </label>
       <label>人数
@@ -453,8 +454,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260827"></script>
-<script src="js/neon-shared.js?v=20260827"></script>
-<script type="module" src="js/main.js?v=20260827"></script>
+<script src="js/socket.io.min.js?v=20260828"></script>
+<script src="js/neon-shared.js?v=20260828"></script>
+<script type="module" src="js/main.js?v=20260828"></script>
 </body>
 </html>

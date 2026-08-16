@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260827 · 死斗13回合CS比分/都市箱庭地图/可进楼房/Tab-KDA/点击锁定不误射/巡飞弹15s+音效/准星打模块/泰坦跳跃 · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260828 · 修天空贴图/换机甲模型不同步/死斗不受时长上限约束+房间模式可选手动选死斗 · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -1765,6 +1765,8 @@ import * as THREE from './three.module.min.js';
       seen.add(sp.id);
       let rp = remotePlayers.get(sp.id);
       if (!rp) rp = createRemotePlayer(sp);
+      // 机甲类型变化（局内换机甲）→ 重建 3D 模型，避免蜘蛛/泰坦显示错误
+      if (sp.mechType && rp.mechType !== sp.mechType) rebuildRemoteModel(rp, sp);
       rp.target.set(sp.x, sp.y, sp.z);
       rp.yawT = sp.yaw;
       rp.group.visible = true;
@@ -2199,23 +2201,24 @@ import * as THREE from './three.module.min.js';
   }
 
   // 天空渐变贴图（城市夜景）：深蓝 → 紫 → 地平线橙红
+  // 注意：作为 scene.background 会拉伸铺满屏幕，画布需足够大且比例接近屏幕，否则出现色带/拉伸星点
   function makeSkyTexture() {
     const c = document.createElement('canvas');
-    c.width = 32; c.height = 256;
+    c.width = 1024; c.height = 512;
     const g = c.getContext('2d');
-    const grad = g.createLinearGradient(0, 0, 0, 256);
+    const grad = g.createLinearGradient(0, 0, 0, 512);
     grad.addColorStop(0, '#04060f');
     grad.addColorStop(0.45, '#0b1030');
     grad.addColorStop(0.75, '#2a1a4a');
     grad.addColorStop(0.92, '#4a2a5a');
     grad.addColorStop(1, '#6a3a5a');
     g.fillStyle = grad;
-    g.fillRect(0, 0, 32, 256);
-    // 星星
+    g.fillRect(0, 0, 1024, 512);
+    // 星星（细点，避免拉伸成横条）
     g.fillStyle = '#cfe0ff';
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 140; i++) {
       g.globalAlpha = 0.3 + Math.random() * 0.7;
-      g.fillRect(Math.random() * 32, Math.random() * 160, 1, 1);
+      g.fillRect(Math.floor(Math.random() * 1024), Math.floor(Math.random() * 300), 1, 1);
     }
     g.globalAlpha = 1;
     const tex = new THREE.CanvasTexture(c);
@@ -2426,6 +2429,32 @@ import * as THREE from './three.module.min.js';
     remotePlayers.set(sp.id, rp);
     setGhost(rp, sp.alive === false);
     return rp;
+  }
+
+  // 局内换机甲：远端玩家机甲类型变化时重建 3D 模型（保留名字/武器/位置朝向）
+  function rebuildRemoteModel(rp, sp) {
+    const group = buildMechModel(sp.mechType || 'humanoid', { color: new THREE.Color(sp.color) });
+    const label = makeNameSprite(rp.name || sp.name);
+    label.position.set(0, (sp.mechType === 'spider' ? 2.2 : 2.6), 0);
+    group.add(label);
+    group.position.copy(rp.group.position);
+    group.rotation.copy(rp.group.rotation);
+    group.visible = rp.group.visible;
+    // 武器挂载
+    const mounts = (group.userData && group.userData.mounts) || [];
+    (sp.weapons || []).forEach((w, i) => { if (mounts[i]) mountWeaponVisual(mounts[i], w); });
+    // 替换旧模型
+    scene.remove(rp.group);
+    rp.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) {
+        if (o.material.map) o.material.map.dispose();
+        o.material.dispose();
+      }
+    });
+    rp.group = group;
+    rp.label = label;
+    scene.add(group);
   }
 
   // 死亡/断线玩家显示为半透明幽灵（遍历所有材质）
