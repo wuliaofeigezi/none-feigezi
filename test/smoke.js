@@ -27,11 +27,16 @@ function once(s, ev, ms) {
 (async () => {
   const sidA = 'test_sid_alice_001';
   const sidB = 'test_sid_bob_002';
+  // 机库配置（人形 4 槽 + 蜘蛛 3 槽）
+  const mechsA = [
+    { type: 'humanoid', weapons: ['gau12', 'laser', 'loiter', 'gau12'] },
+    { type: 'spider', weapons: ['loiter', 'gau12', 'laser'] },
+  ];
 
   // ---- 建房（Alice） ----
   const a = await makeClient('Alice', sidA);
   const joinedAP = once(a, 'room:joined');
-  a.emit('room:create', { name: 'Alice', playerName: 'Alice', sessionId: sidA, mode: 'ffa' });
+  a.emit('room:create', { name: 'Alice', playerName: 'Alice', sessionId: sidA, mode: 'ffa', mechs: mechsA });
   const joinedA = await joinedAP;
   const code = joinedA.room.code;
   assert(joinedA.room.settings.mode === 'ffa', '默认模式应为 ffa');
@@ -40,7 +45,7 @@ function once(s, ev, ms) {
   // ---- Bob 加入（大厅阶段） ----
   const b = await makeClient('Bob', sidB);
   const joinedBP = once(b, 'room:joined');
-  b.emit('room:join', { code, name: 'Bob', sessionId: sidB });
+  b.emit('room:join', { code, name: 'Bob', sessionId: sidB, mechs: mechsA });
   const joinedB = await joinedBP;
   assert(joinedB.room.players.length === 2, '加入后应有 2 人');
   console.log('B 加入房间，当前人数:', joinedB.room.players.length);
@@ -53,7 +58,9 @@ function once(s, ev, ms) {
   const welcomeB = await welcomeBP;
   assert(welcomeA.map.boxes.length > 0, 'welcome 应携带地图数据');
   assert(welcomeA.resumed === false && welcomeB.resumed === false, '首次开局 resumed 应为 false');
-  console.log('开局:', welcomeA.self.name, '+', welcomeB.self.name, '| 地图盒子数:', welcomeA.map.boxes.length);
+  assert(welcomeA.self.mechType === 'humanoid', '默认出战机甲应为人形');
+  assert(welcomeA.self.weapons.length === 4, '人形应 4 武器槽');
+  console.log('开局:', welcomeA.self.name, '+', welcomeB.self.name, '| 机甲:', welcomeA.self.mechType, '| 地图盒子数:', welcomeA.map.boxes.length);
 
   // ---- 对打 4 秒（站桩射击，避免游走误吃血包导致断言抖动） ----
   let statesA = 0, statesB = 0, killsSeen = 0;
@@ -72,7 +79,7 @@ function once(s, ev, ms) {
   await sleep(4000);
   clearInterval(t);
 
-  console.log('A 状态:', JSON.stringify({ alive: lastMe1.alive, health: lastMe1.health, kills: lastMe1.kills, deaths: lastMe1.deaths, score: lastMe1.score }));
+  console.log('A 状态:', JSON.stringify({ alive: lastMe1.alive, chest: lastMe1.mech && lastMe1.mech.chest, kills: lastMe1.kills, deaths: lastMe1.deaths, score: lastMe1.score }));
   console.log('state 次数 A:', statesA, '| B:', statesB, '| 击杀事件:', killsSeen);
 
   const gotState = await new Promise((r) => a.once('state', r));
@@ -82,9 +89,9 @@ function once(s, ev, ms) {
     process.exit(1);
   }
 
-  // ---- 持续开火回归：长时间按住开火，弹道不应中断 ----
+  // ---- 持续开火回归：长时间按住开火，机炮曳光/弹道不应中断 ----
   let projStates = 0;
-  a.on('state', (st) => { if (st.projectiles.length > 0) projStates++; });
+  a.on('state', (st) => { if ((st.shots && st.shots.length > 0) || (st.projectiles && st.projectiles.length > 0)) projStates++; });
   const hold = setInterval(() => b.emit('input', { fwd: 0, strafe: 0, jump: false, fire: true, yaw: 0, pitch: 0 }), 50);
   await sleep(2000);
   clearInterval(hold);
@@ -94,6 +101,17 @@ function once(s, ev, ms) {
     process.exit(1);
   }
   console.log('✅ 持续开火回归通过');
+
+  // ---- 自杀机制：socket 事件 suicide → 死亡播报（cause=suicide） ----
+  const suicideP = new Promise((resolve, reject) => {
+    a.once('kill', (k) => resolve(k));
+    b.emit('suicide'); // Bob 自杀（此时仍用原连接 b）
+    setTimeout(() => reject(new Error('自杀 kill 事件超时')), 5000);
+  });
+  const suicideKill = await suicideP;
+  assert(suicideKill.victimName === 'Bob' && suicideKill.cause === 'suicide', '自杀应广播 kill(cause=suicide)');
+  console.log('✅ 自杀机制通过（', suicideKill.killerName, '->', suicideKill.victimName, ')');
+  await sleep(3500); // ffa 中自杀后 3 秒复活
 
   // ---- 断线重连：同 sessionId 恢复原玩家（不新增、不触发 playerJoined） ----
   let joinedDuring = 0;

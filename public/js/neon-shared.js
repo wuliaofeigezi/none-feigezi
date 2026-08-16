@@ -38,6 +38,86 @@
   const ZONE_R = 4.5;             // 占领区半径
   const VOTE_CHANGE_MS = 3000;    // CTF 投票改选冷却
 
+  // ---------- 机甲定义（War Robots 风格） ----------
+  const MODULE_LEG = 'leg';
+  const MODULE_CHEST = 'chest';
+  const MODULE_CORE = 'core';
+
+  // 胸部血量耗尽后，命中胸部的子弹伤害核心的概率
+  const CORE_HIT_CHANCE = 0.5;
+
+  const MECHS = {
+    // 人形战斗机器人：双腿 + 胸部 + 藏于胸部的核心，肩部 4 战斗模块槽
+    humanoid: {
+      name: '人形战斗机器人',
+      legs: 2, legHp: 100, chestHp: 250, coreHp: 100,
+      mounts: 4,
+      // 损毁 0/1/2 条腿的移速倍率：-0% / -50% / -80%
+      legSpeedMul: [1, 0.5, 0.2],
+      // 模块命中高度分段（腿部 / 胸部），用于弹道命中判定
+      legHeight: 0.95, chestHeight: 1.75,
+    },
+    // 蜘蛛机器人：六条腿 + 胸部 + 核心，胸部两侧 + 顶部共 3 战斗模块槽
+    spider: {
+      name: '蜘蛛机器人',
+      legs: 6, legHp: 100, chestHp: 150, coreHp: 100,
+      mounts: 3,
+      // 损毁 0..6 条腿：-0%/-5%/-25%/-50%/-80%/-95%/-100%（失去行动能力）
+      legSpeedMul: [1, 0.95, 0.75, 0.5, 0.2, 0.05, 0],
+      legHeight: 0.7, chestHeight: 1.3,
+    },
+  };
+  const DEFAULT_MECH = 'humanoid';
+
+  // ---------- 战斗模块（武器）定义 ----------
+  const WEAPONS = {
+    // Gau12“破坏者”30mm 机炮：720 发/分，480 备弹，装填 15s，不可边打边装填，每发 1 伤害
+    gau12: {
+      name: 'Gau12 破坏者', type: 'bullet',
+      rpm: 720, mag: 480, reloadMs: 15000,
+      dmg: 1, canReloadWhileFire: false,
+    },
+    // 镭射激光：击中后 10 秒内每秒 5 伤害，满装填 30s，可边打边装填
+    laser: {
+      name: '镭射激光', type: 'laser',
+      dmgPerSec: 5, burnMs: 10000,
+      chargeFullMs: 30000, maxBeamMs: 10000,
+      canReloadWhileFire: true,
+    },
+    // 巡飞弹：弹夹 5 发一次性全部打出，装填 20s，有散布，可越地形，每发命中模块 20 伤害
+    loiter: {
+      name: '巡飞弹', type: 'loiter',
+      mag: 5, volley: 5, reloadMs: 20000, dmg: 20,
+      spread: 0.12, speed: 26, arcHeight: 16, blastRadius: 2.5,
+    },
+  };
+  const DEFAULT_WEAPON = 'gau12';
+
+  // 依据机甲类型与损毁腿数返回移速倍率
+  function mechSpeedMul(type, legsDestroyed) {
+    const m = MECHS[type] || MECHS[DEFAULT_MECH];
+    const i = Math.max(0, Math.min(legsDestroyed, m.legSpeedMul.length - 1));
+    return m.legSpeedMul[i];
+  }
+
+  // 规范化武器槽：长度对齐 mounts，非法值回退默认武器
+  function normalizeWeapons(raw, mounts) {
+    const list = Array.isArray(raw) ? raw : [];
+    const out = [];
+    for (let i = 0; i < mounts; i++) {
+      const w = list[i];
+      out.push(WEAPONS[w] ? w : DEFAULT_WEAPON);
+    }
+    return out;
+  }
+
+  // 规范化机甲配置 { type, weapons } → { type, weapons }
+  function normalizeMech(raw) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    const type = MECHS[r.type] ? r.type : DEFAULT_MECH;
+    return { type, weapons: normalizeWeapons(r.weapons, MECHS[type].mounts) };
+  }
+
   // ---------- 工具函数 ----------
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
@@ -115,6 +195,9 @@
     PROJ_SPEED, PROJ_R, PROJ_LIFE, DMG, RESPAWN_MS, MAX_PLAYERS,
     PICKUP_RANGE, PICKUP_RESPAWN_MS, PICKUP_HEAL, KILLFEED_MAX,
     ZONE_WIN, ZONE_R, VOTE_CHANGE_MS,
+    MODULE_LEG, MODULE_CHEST, MODULE_CORE, CORE_HIT_CHANCE,
+    MECHS, DEFAULT_MECH, WEAPONS, DEFAULT_WEAPON,
+    mechSpeedMul, normalizeWeapons, normalizeMech,
     clamp, sanitizeName, lerpAngle, toAABB, overlapAABB, moveAxis,
   };
 });

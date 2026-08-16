@@ -1,14 +1,18 @@
 'use strict';
 // 霓虹竞技场 — 服务器权威游戏逻辑（20Hz 状态同步）
-// 模式：ffa 死亡竞赛 | zone 占点 | ctf 夺旗卡牌赛（每回合抽卡投票 + 夺旗）
+// 模式：ffa 死亡竞赛 | zone 占点 | ctf 夺旗卡牌赛 | duel 死斗（红蓝两队基地核心）
+// 机甲系统全局生效：人形/蜘蛛两种机甲，腿部/胸部/核心模块血量，腿部损毁减速，核心被击即死
 // 按房间作用域运行：每个房间一个 Game 实例，广播只发到本房间（io.to(roomId)）
 const { MAP } = require('./map');
 // 共享常量与工具（客户端/服务端唯一事实来源，禁止在本文件重复定义）
 const {
   TICK_MS, GRAVITY, MOVE_SPEED, JUMP_VEL, MAX_FALL,
-  PLAYER_R, PLAYER_H, EYE_H, MAX_HEALTH, FIRE_CD, PROJ_SPEED, PROJ_R, PROJ_LIFE,
-  DMG, RESPAWN_MS, MAX_PLAYERS, PICKUP_RANGE, PICKUP_RESPAWN_MS, PICKUP_HEAL,
-  KILLFEED_MAX, ZONE_WIN, ZONE_R, VOTE_CHANGE_MS,
+  PLAYER_R, PLAYER_H, EYE_H, MAX_HEALTH, RESPAWN_MS, MAX_PLAYERS,
+  PICKUP_RANGE, PICKUP_RESPAWN_MS, PICKUP_HEAL, KILLFEED_MAX,
+  ZONE_WIN, ZONE_R, VOTE_CHANGE_MS,
+  MODULE_LEG, MODULE_CHEST, MODULE_CORE, CORE_HIT_CHANCE,
+  MECHS, DEFAULT_MECH, WEAPONS,
+  mechSpeedMul, normalizeMech, normalizeWeapons,
   clamp, sanitizeName, toAABB, moveAxis,
 } = require('../public/js/neon-shared.js');
 
@@ -46,26 +50,31 @@ const CTF_VOTE_CHANGE_MS = VOTE_CHANGE_MS; // 投票改选冷却（共享常量�
 // 旗手惩罚（携带敌方旗帜时）
 const CTF_CARRIER_SPEED_MUL = 0.5;    // 移速 -50%
 const CTF_CARRIER_JUMP_MUL = 0.65;    // 跳跃 -35%
-const CTF_CARRIER_DMG_MUL = 1.5;      // 受击伤害 +50%
 const CTF_CARRIER_NO_HEAL = true;     // 不能捡血包（旗手不可回血）
 
-// FragPunk 式卡牌池：apply 修改本回合 cfg
+// 死斗模式（Duel）：红蓝两队基地核心，靠近部署装置 10 秒破坏核心直接获胜
+const DUEL_BASES = [
+  { team: 0, x: -40, z: 0 },
+  { team: 1, x: 40, z: 0 },
+];
+const DUEL_CORE_RADIUS = 4.5;    // 核心判定半径
+const DUEL_DEPLOY_SEC = 10;      // 部署装置所需秒数
+
+// FragPunk 式卡牌池：apply 修改本回合 cfg（数值已适配机甲武器系统）
 const CARD_POOL = [
   { id: 'speed', name: '疾风', desc: '全体移速 +50%', apply: (g) => { g.cfg.moveSpeed *= 1.5; } },
   { id: 'jump', name: '弹跳', desc: '跳跃力 +60%', apply: (g) => { g.cfg.jumpVel *= 1.6; } },
-  { id: 'rapid', name: '速射', desc: '射速翻倍', apply: (g) => { g.cfg.fireCd *= 0.5; } },
-  { id: 'pierce', name: '重弹', desc: '伤害翻倍', apply: (g) => { g.cfg.dmg *= 2; } },
-  { id: 'fragile', name: '纸甲', desc: '血量上限减半', apply: (g) => { g.cfg.maxHealth = Math.max(30, Math.floor(g.cfg.maxHealth * 0.5)); } },
-  { id: 'tank', name: '铁壁', desc: '血量上限 +50%', apply: (g) => { g.cfg.maxHealth = Math.min(200, Math.floor(g.cfg.maxHealth * 1.5)); } },
+  { id: 'rapid', name: '速射', desc: '机炮射速翻倍', apply: (g) => { g.cfg.weaponRpmMul *= 2; } },
+  { id: 'pierce', name: '重弹', desc: '武器伤害翻倍', apply: (g) => { g.cfg.weaponDmgMul *= 2; } },
+  { id: 'fragile', name: '纸甲', desc: '胸部血量上限减半', apply: (g) => { g.cfg.chestMul = Math.max(0.5, g.cfg.chestMul * 0.5); g.rescaleChest(); } },
+  { id: 'tank', name: '铁壁', desc: '胸部血量上限 +50%', apply: (g) => { g.cfg.chestMul = Math.min(2, g.cfg.chestMul * 1.5); g.rescaleChest(); } },
   { id: 'moon', name: '月球', desc: '重力减半，跳得更远', apply: (g) => { g.cfg.gravity *= 0.5; } },
   { id: 'heavy', name: '重力场', desc: '重力 +60%', apply: (g) => { g.cfg.gravity *= 1.6; } },
   { id: 'spawn', name: '重生', desc: '复活缩短至 1 秒', apply: (g) => { g.cfg.respawnMs = 1000; } },
   { id: 'pickup', name: '丰收', desc: '血包回血翻倍', apply: (g) => { g.cfg.pickupHeal *= 2; } },
   { id: 'slow', name: '泥沼', desc: '全体移速 -25%', apply: (g) => { g.cfg.moveSpeed *= 0.75; } },
-  { id: 'storm', name: '弹幕', desc: '弹丸速度 +40%，射程更长', apply: (g) => { g.cfg.projSpeed *= 1.4; g.cfg.projLife *= 1.3; } },
+  { id: 'storm', name: '弹幕', desc: '巡飞弹速度 +40%，射程更长', apply: (g) => { g.cfg.loiterSpeedMul *= 1.4; } },
 ];
-
-// KILLFEED_MAX / PICKUP_RANGE / PICKUP_RESPAWN_MS / PICKUP_HEAL 来自共享常量
 
 const COLORS = [
   '#ff3b5c', '#3b82f6', '#22d3ee', '#a855f7', '#f59e0b', '#10b981',
@@ -79,11 +88,13 @@ const colliders = MAP.boxes.map(toAABB);
 function defaultCfg(mode) {
   return {
     gravity: GRAVITY, moveSpeed: MOVE_SPEED, jumpVel: JUMP_VEL,
-    maxHealth: MAX_HEALTH, fireCd: FIRE_CD, projSpeed: PROJ_SPEED, projLife: PROJ_LIFE,
-    dmg: DMG, respawnMs: RESPAWN_MS, pickupHeal: PICKUP_HEAL,
+    maxHealth: MAX_HEALTH, respawnMs: RESPAWN_MS, pickupHeal: PICKUP_HEAL,
+    weaponDmgMul: 1, weaponRpmMul: 1, chestMul: 1, loiterSpeedMul: 1,
     mode,
   };
 }
+
+function isTeamMode(mode) { return mode === 'ctf' || mode === 'duel'; }
 
 class Game {
   constructor(io, roomId, settings, hooks) {
@@ -95,12 +106,16 @@ class Game {
     this.emit = (ev, data) => io.to(roomId).emit(ev, data);
 
     this.maxPlayers = clamp(parseInt(this.settings.maxPlayers, 10) || MAX_PLAYERS, 1, MAX_PLAYERS);
-    this.mode = (this.settings.mode === 'zone' || this.settings.mode === 'ctf') ? this.settings.mode : 'ffa';
+    this.mode = (this.settings.mode === 'zone' || this.settings.mode === 'ctf' || this.settings.mode === 'duel')
+      ? this.settings.mode : 'ffa';
     this.durationMs = (parseInt(this.settings.matchMinutes, 10) || 5) * 60 * 1000;
     this.cfg = defaultCfg(this.mode);
 
     this.players = new Map();
-    this.projectiles = [];
+    this.projectiles = [];   // 巡飞弹（带弧线轨迹）
+    this.shots = [];         // 机炮曳光（本 tick 内累积，广播后清空）
+    this.beams = [];         // 激光束（本 tick）
+    this.explosions = [];    // 爆炸（本 tick）
     this.killfeed = [];
     this.pickups = MAP.pickups.map((p, i) => ({
       id: i, x: p.x, z: p.z, type: 'health', active: true, respawnAt: 0,
@@ -110,6 +125,17 @@ class Game {
     this.startedAt = 0;
     this._ended = false;
     this.zone = { spot: 0, x: ZONE_SPOTS[0].x, z: ZONE_SPOTS[0].z, y: ZONE_SPOTS[0].y, r: ZONE_R, nextMoveAt: 0 };
+
+    // 死斗模式状态
+    this.duel = null;
+    if (this.mode === 'duel') {
+      this.duel = {
+        bases: DUEL_BASES.map((b) => ({ team: b.team, x: b.x, z: b.z, coreAlive: true, deploy: 0 })),
+        coreRadius: DUEL_CORE_RADIUS,
+        deployNeed: DUEL_DEPLOY_SEC,
+        winnerTeam: null,
+      };
+    }
 
     // 夺旗卡牌赛状态
     this.ctf = null;
@@ -134,7 +160,7 @@ class Game {
   }
 
   // ---------- 对局生命周期 ----------
-  // seeds: [{ socketId, name, sessionId }]（来自房间成员）
+  // seeds: [{ socketId, name, sessionId, mechs }]（来自房间成员）
   start(seeds) {
     for (let i = 0; i < seeds.length; i++) this.attachPlayer(seeds[i].socketId, seeds[i], i);
     this.startedAt = Date.now();
@@ -163,7 +189,7 @@ class Game {
     return p;
   }
 
-  // 对局中断线重连：同 sessionId 恢复原玩家（分数/位置/血量全保留）
+  // 对局中断线重连：同 sessionId 恢复原玩家（分数/位置/模块血量全保留）
   resume(socket, sessionId) {
     if (!sessionId || !this.active) return false;
     for (const [oldId, p] of this.players) {
@@ -195,25 +221,36 @@ class Game {
       socket.removeListener('input', socket._naGame.input);
       socket.removeListener('vote', socket._naGame.vote);
       socket.removeListener('ping', socket._naGame.ping);
+      socket.removeListener('suicide', socket._naGame.suicide);
       socket.removeListener('disconnect', socket._naGame.disconnect);
     }
     const h = {
       input: (d) => this.onInput(p.id, d),
       vote: (d) => this.onVote(p.id, d),
       ping: (cb) => { if (typeof cb === 'function') cb(Date.now()); },
+      suicide: () => this.onSuicide(p.id),
       disconnect: () => this.onLeave(p.id),
     };
     socket._naGame = h;
     socket.on('input', h.input);
     socket.on('vote', h.vote);
     socket.on('ping', h.ping);
+    socket.on('suicide', h.suicide);
     socket.on('disconnect', h.disconnect);
+  }
+
+  // 机甲配置列表（机库 2 个槽位），非法输入回退默认
+  normalizeMechList(raw) {
+    const list = Array.isArray(raw) ? raw.slice(0, 2) : [];
+    const out = list.map(normalizeMech);
+    if (!out.length) out.push({ type: DEFAULT_MECH, weapons: [] });
+    return out;
   }
 
   createPlayer(socketId, seed, seedIdx) {
     const idx = this.players.size % COLORS.length;
     let team = 0;
-    if (this.mode === 'ctf') {
+    if (isTeamMode(this.mode)) {
       // 开局轮流分边；中途加入补进人数少的一边
       if (typeof seedIdx === 'number') team = seedIdx % 2;
       else {
@@ -222,9 +259,10 @@ class Game {
         team = counts[0] <= counts[1] ? 0 : 1;
       }
     }
-    const spawn = this.pickSpawn(this.mode === 'ctf' ? team : null);
-    const color = (this.mode === 'ctf') ? TEAM_COLORS[team] : COLORS[idx];
-    return {
+    const spawn = this.pickSpawn(isTeamMode(this.mode) ? team : null);
+    const color = isTeamMode(this.mode) ? TEAM_COLORS[team] : COLORS[idx];
+    const mechs = this.normalizeMechList(seed && seed.mechs);
+    const p = {
       id: socketId,
       name: sanitizeName(seed && seed.name),
       color,
@@ -236,17 +274,51 @@ class Game {
       vel: { x: 0, y: 0, z: 0 },
       yaw: Math.random() * Math.PI * 2,
       pitch: 0,
-      health: this.cfg.maxHealth,
       score: 0,
       kills: 0,
       deaths: 0,
       alive: true,
       respawnAt: 0,
       respawnIn: 0,
-      fireCd: 0,
       grounded: true,
       input: { fwd: 0, strafe: 0, jump: false, fire: false },
+      mechs,           // 机库配置 [{type, weapons}, ...]（死斗=两次生命）
+      mechIndex: 0,    // 当前出战机甲下标
+      lives: this.mode === 'duel' ? mechs.length : Infinity,
+      burns: new Map(),// 激光灼烧：ownerId -> {dps, endsAt, part, legIndex}
     };
+    this.applyMech(p, mechs[0]);
+    return p;
+  }
+
+  // 给玩家套上一台机甲（重置模块血量与武器状态）
+  applyMech(p, mechCfg) {
+    const cfg = MECHS[mechCfg.type] || MECHS[DEFAULT_MECH];
+    p.mechType = mechCfg.type;
+    p.weapons = normalizeWeapons(mechCfg.weapons, cfg.mounts);
+    p.mech = {
+      legs: Array.from({ length: cfg.legs }, () => cfg.legHp),
+      chest: Math.round(cfg.chestHp * this.cfg.chestMul),
+      chestMax: Math.round(cfg.chestHp * this.cfg.chestMul),
+      core: cfg.coreHp,
+      chestBroken: false,
+    };
+    p.legsDestroyed = 0;
+    p.weaponState = p.weapons.map((t) => {
+      const w = WEAPONS[t];
+      if (t === 'laser') return { type: t, charge: 1 };
+      return { type: t, ammo: w.mag, reloading: false, reloadEndsAt: 0, fireCd: 0 };
+    });
+    p.burns = new Map();
+  }
+
+  // 卡牌改变胸部血量上限后，同步现有玩家（不补偿已损毁血量）
+  rescaleChest() {
+    for (const p of this.players.values()) {
+      const base = MECHS[p.mechType].chestHp;
+      p.mech.chestMax = Math.round(base * this.cfg.chestMul);
+      p.mech.chest = Math.min(p.mech.chest, p.mech.chestMax);
+    }
   }
 
   onLeave(id) {
@@ -272,8 +344,8 @@ class Game {
 
   pickSpawn(team) {
     let list = MAP.spawns.slice();
-    // CTF：按队伍出生在己方一侧
-    if (this.mode === 'ctf' && (team === 0 || team === 1)) {
+    // CTF / 死斗：按队伍出生在己方一侧
+    if (isTeamMode(this.mode) && (team === 0 || team === 1)) {
       list = list.filter((s) => (team === 0 ? s.x < 0 : s.x > 0));
     }
     for (let i = list.length - 1; i > 0; i--) {
@@ -304,6 +376,13 @@ class Game {
       if (Number.isFinite(data.yaw)) p.yaw = data.yaw;
       if (Number.isFinite(data.pitch)) p.pitch = clamp(data.pitch, -1.5, 1.5);
     }
+  }
+
+  // ---------- 自杀机制（ESC 菜单 / 长按 J 3 秒触发） ----------
+  onSuicide(playerId) {
+    const p = this.players.get(playerId);
+    if (!this.active || !p || !p.connected || !p.alive) return;
+    this.killPlayer(p, null, Date.now(), 'suicide');
   }
 
   // ---------- CTF：卡牌投票 ----------
@@ -466,10 +545,51 @@ class Game {
     if (c.scores[carrier.team] >= CTF_CAPTURE_TARGET) this.endCtfRound(carrier.team);
   }
 
+  // ---------- 死斗模式 ----------
+  updateDuel(now) {
+    const d = this.duel;
+    if (!d || d.winnerTeam !== null) return;
+    // 1) 基地核心：敌方存活玩家靠近部署装置，累计 10 秒破坏核心直接获胜
+    for (const b of d.bases) {
+      if (!b.coreAlive) continue;
+      let enemyNear = false;
+      for (const p of this.players.values()) {
+        if (!p.alive || !p.connected || p.team === b.team) continue;
+        const dx = p.pos.x - b.x, dz = p.pos.z - b.z;
+        if (dx * dx + dz * dz <= d.coreRadius * d.coreRadius) { enemyNear = true; break; }
+      }
+      if (enemyNear) {
+        b.deploy = Math.min(d.deployNeed, b.deploy + TICK_MS / 1000);
+        if (b.deploy >= d.deployNeed) {
+          b.coreAlive = false;
+          d.winnerTeam = 1 - b.team;
+          this.emit('duel:core', { team: b.team, winnerTeam: d.winnerTeam, x: b.x, z: b.z });
+          console.log(`[neon-arena][${this.roomId}] [duel] 红/蓝基地核心被摧毁，${d.winnerTeam === 0 ? '红' : '蓝'}队获胜`);
+          this.endGame(d.winnerTeam);
+          return;
+        }
+      } else {
+        b.deploy = Math.max(0, b.deploy - (TICK_MS / 1000) * 2); // 离开则快速衰减
+      }
+    }
+    // 2) 全灭判定：一方所有人都用完机甲（出局）→ 另一方获胜
+    const teamActive = [false, false];
+    for (const p of this.players.values()) {
+      if (p.mechIndex < p.mechs.length) teamActive[p.team] = true;
+    }
+    if (!teamActive[0] && !teamActive[1]) return; // 同归于尽：等时间到按击杀判定
+    if (!teamActive[0]) { d.winnerTeam = 1; this.endGame(1); return; }
+    if (!teamActive[1]) { d.winnerTeam = 0; this.endGame(0); return; }
+  }
+
   // ---------- tick ----------
   tick() {
     if (!this.active) return;
     const now = Date.now();
+    // 本 tick 的瞬态视觉数据（广播后即失效）
+    this.shots = [];
+    this.beams = [];
+    this.explosions = [];
     // 全员退出/断线超时 → 直接结束对局，避免空房间泄漏
     if (this.players.size === 0) { this.endGame(); return; }
     // 对局时长到点 → 结束
@@ -510,16 +630,399 @@ class Game {
         continue;
       }
       this.physics(p, dt);
-      if (p.fireCd > 0) p.fireCd -= dt;
-      if (p.input.fire && p.fireCd <= 0) this.shoot(p);
+      this.updateWeapons(p, dt, now);
       this.checkPickups(p, now);
     }
+    this.updateBurns(dt, now);
     this.updateProjectiles(dt, now);
     this.updatePickups(now);
     if (this.mode === 'zone') this.updateZone(now);
+    if (this.mode === 'duel') this.updateDuel(now);
     this.broadcast(now);
   }
 
+  // ---------- 机甲武器系统 ----------
+  updateWeapons(p, dt, now) {
+    for (const ws of p.weaponState) {
+      if (ws.type === 'gau12') this.updateGau12(p, ws, dt, now);
+      else if (ws.type === 'laser') this.updateLaser(p, ws, dt, now);
+      else if (ws.type === 'loiter') this.updateLoiter(p, ws, dt, now);
+    }
+  }
+
+  muzzle(p) {
+    const h = MECHS[p.mechType].chestHeight * 0.7;
+    return { x: p.pos.x, y: p.pos.y + h, z: p.pos.z };
+  }
+
+  // 视线射线：找第一个命中（墙壁 / 玩家模块），maxDist 米
+  rayHit(origin, dir, maxDist, shooter) {
+    const step = 0.25;
+    for (let d = 0.5; d <= maxDist; d += step) {
+      const x = origin.x + dir.x * d;
+      const y = origin.y + dir.y * d;
+      const z = origin.z + dir.z * d;
+      if (this.hitColliderAt(x, y, z)) return { point: { x, y, z }, player: null, part: null, legIndex: null };
+      for (const p of this.players.values()) {
+        if (!p.alive || !p.connected || p.id === shooter.id) continue;
+        if (isTeamMode(this.mode) && p.team === shooter.team) continue; // 团队模式不攻击同队
+        const dx = p.pos.x - x, dz = p.pos.z - z;
+        if (dx * dx + dz * dz > (PLAYER_R + 0.15) * (PLAYER_R + 0.15)) continue;
+        const relY = y - p.pos.y;
+        if (relY < -0.1 || relY > MECHS[p.mechType].chestHeight) continue;
+        const part = relY <= MECHS[p.mechType].legHeight ? MODULE_LEG : MODULE_CHEST;
+        return {
+          point: { x, y, z }, player: p, part,
+          legIndex: part === MODULE_LEG ? this.randomAliveLeg(p) : null,
+        };
+      }
+    }
+    return { point: { x: origin.x + dir.x * maxDist, y: origin.y + dir.y * maxDist, z: origin.z + dir.z * maxDist }, player: null, part: null, legIndex: null };
+  }
+
+  randomAliveLeg(p) {
+    const alive = [];
+    for (let i = 0; i < p.mech.legs.length; i++) if (p.mech.legs[i] > 0) alive.push(i);
+    if (!alive.length) return 0;
+    return alive[Math.floor(Math.random() * alive.length)];
+  }
+
+  countLegsDestroyed(p) {
+    let n = 0;
+    for (const h of p.mech.legs) if (h <= 0) n++;
+    return n;
+  }
+
+  // Gau12 破坏者：720 发/分，命中一发 1 伤害，不可边打边装填
+  updateGau12(p, ws, dt, now) {
+    const w = WEAPONS.gau12;
+    if (ws.reloading) {
+      if (now >= ws.reloadEndsAt) { ws.ammo = w.mag; ws.reloading = false; }
+      return;
+    }
+    if (!p.input.fire || ws.ammo <= 0) return;
+    ws.fireCd = (ws.fireCd || 0) - dt;
+    if (ws.fireCd <= 0) {
+      const rpmMul = this.cfg.weaponRpmMul || 1;
+      ws.fireCd = 60 / w.rpm / rpmMul;
+      const origin = this.muzzle(p);
+      const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
+      const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+      const hit = this.rayHit(origin, dir, 60, p);
+      if (hit.player) {
+        this.damageModule(hit.player, hit.part, w.dmg * (this.cfg.weaponDmgMul || 1), p.id, now, hit.legIndex);
+      }
+      this.shots.push({
+        owner: p.id,
+        x1: origin.x, y1: origin.y, z1: origin.z,
+        x2: hit.point.x, y2: hit.point.y, z2: hit.point.z,
+        hit: !!hit.player,
+      });
+      ws.ammo--;
+      if (ws.ammo <= 0) { ws.reloading = true; ws.reloadEndsAt = now + w.reloadMs; }
+    }
+  }
+
+  // 镭射激光：持续光束，命中施加灼烧（每秒 5 伤害，持续 10 秒），30 秒满充能且可边打边充
+  updateLaser(p, ws, dt, now) {
+    const w = WEAPONS.laser;
+    // 始终充能（可边打边装填）
+    ws.charge = Math.min(1, (ws.charge || 1) + dt / (w.chargeFullMs / 1000));
+    if (!p.input.fire || ws.charge <= 0.01) { ws.beam = false; return; }
+    ws.charge = Math.max(0, ws.charge - dt / (w.maxBeamMs / 1000));
+    if (ws.charge <= 0.01) { ws.beam = false; return; }
+    ws.beam = true;
+    const origin = this.muzzle(p);
+    const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
+    const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+    const hit = this.rayHit(origin, dir, 60, p);
+    this.beams.push({
+      owner: p.id,
+      x1: origin.x, y1: origin.y, z1: origin.z,
+      x2: hit.point.x, y2: hit.point.y, z2: hit.point.z,
+      targetId: hit.player ? hit.player.id : null,
+    });
+    if (hit.player) {
+      const burn = hit.player.burns.get(p.id);
+      if (burn) {
+        burn.endsAt = now + w.burnMs;
+        burn.part = hit.part;
+        burn.legIndex = hit.legIndex;
+      } else {
+        hit.player.burns.set(p.id, {
+          dps: w.dmgPerSec * (this.cfg.weaponDmgMul || 1),
+          endsAt: now + w.burnMs,
+          part: hit.part,
+          legIndex: hit.legIndex,
+        });
+      }
+    }
+  }
+
+  updateBurns(dt, now) {
+    for (const p of this.players.values()) {
+      if (!p.alive || !p.connected) { p.burns.clear(); continue; }
+      for (const [ownerId, burn] of [...p.burns]) {
+        if (now >= burn.endsAt) { p.burns.delete(ownerId); continue; }
+        this.damageModule(p, burn.part, burn.dps * dt, ownerId, now, burn.legIndex);
+      }
+    }
+  }
+
+  // 巡飞弹：弹夹 5 发一次性全部打出，20 秒装填，有散布，弧线越地形
+  updateLoiter(p, ws, dt, now) {
+    const w = WEAPONS.loiter;
+    if (ws.reloading) {
+      if (now >= ws.reloadEndsAt) { ws.ammo = w.mag; ws.reloading = false; }
+      return;
+    }
+    if (!p.input.fire || ws.ammo < w.volley) return;
+    const origin = this.muzzle(p);
+    const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
+    const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+    for (let i = 0; i < w.volley; i++) {
+      // 瞄准点：视线与地面交点 + 随机散布偏移
+      const tGround = (dir.y < -0.01) ? (-origin.y / dir.y) : 60;
+      const gx = origin.x + dir.x * tGround;
+      const gz = origin.z + dir.z * tGround;
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.random() * w.spread * Math.max(5, Math.hypot(gx - origin.x, gz - origin.z));
+      const tx = gx + Math.cos(ang) * rad;
+      const tz = gz + Math.sin(ang) * rad;
+      const dist = Math.hypot(tx - origin.x, tz - origin.z);
+      const dur = Math.max(1.0, dist / (w.speed * (this.cfg.loiterSpeedMul || 1)));
+      this.projectiles.push({
+        kind: 'loiter', owner: p.id,
+        x0: origin.x, y0: origin.y, z0: origin.z,
+        tx, tz, arcH: w.arcHeight,
+        t: 0, dur,
+        x: origin.x, y: origin.y, z: origin.z,
+      });
+    }
+    ws.ammo -= w.volley;
+    if (ws.ammo <= 0) { ws.reloading = true; ws.reloadEndsAt = now + w.reloadMs; }
+  }
+
+  updateProjectiles(dt, now) {
+    const next = [];
+    for (const pr of this.projectiles) {
+      if (pr.kind !== 'loiter') continue;
+      pr.t += dt;
+      const k = Math.min(1, pr.t / pr.dur);
+      pr.x = pr.x0 + (pr.tx - pr.x0) * k;
+      pr.z = pr.z0 + (pr.tz - pr.z0) * k;
+      pr.y = pr.y0 + pr.arcH * 4 * k * (1 - k); // 抛物线弧线，越过高地形
+      if (k >= 1) {
+        this.explodeLoiter(pr, now);
+        this.explosions.push({ x: pr.x, y: pr.y, z: pr.z });
+        continue;
+      }
+      next.push(pr);
+    }
+    this.projectiles = next;
+  }
+
+  explodeLoiter(pr, now) {
+    const shooter = this.players.get(pr.owner);
+    const w = WEAPONS.loiter;
+    for (const p of this.players.values()) {
+      if (!p.alive || !p.connected || p.id === pr.owner) continue;
+      if (shooter && isTeamMode(this.mode) && p.team === shooter.team) continue;
+      const dx = p.pos.x - pr.x, dz = p.pos.z - pr.z;
+      if (dx * dx + dz * dz <= w.blastRadius * w.blastRadius) {
+        // 爆炸命中随机模块：50% 腿（随机存活腿）/ 50% 胸部
+        const part = Math.random() < 0.5 ? MODULE_LEG : MODULE_CHEST;
+        const legIdx = part === MODULE_LEG ? this.randomAliveLeg(p) : null;
+        this.damageModule(p, part, w.dmg * (this.cfg.weaponDmgMul || 1), pr.owner, now, legIdx);
+      }
+    }
+  }
+
+  hitColliderAt(x, y, z) {
+    for (const c of colliders) {
+      if (x > c.minX - 0.2 && x < c.maxX + 0.2 &&
+        y > c.minY - 0.2 && y < c.maxY + 0.2 &&
+        z > c.minZ - 0.2 && z < c.maxZ + 0.2) return true;
+    }
+    return false;
+  }
+
+  // ---------- 模块伤害与死亡 ----------
+  // part: leg | chest | core；legIdx 可选（不传则随机存活腿）
+  damageModule(victim, part, dmg, killerId, now, legIdx) {
+    if (!victim || !victim.alive || !victim.connected || dmg <= 0) return false;
+    const m = victim.mech;
+    if (part === MODULE_LEG) {
+      const idx = (Number.isInteger(legIdx) && m.legs[legIdx] > 0)
+        ? legIdx : this.randomAliveLeg(victim);
+      if (idx == null) return false;
+      m.legs[idx] = Math.max(0, m.legs[idx] - dmg);
+      if (m.legs[idx] === 0) {
+        const before = victim.legsDestroyed;
+        victim.legsDestroyed = this.countLegsDestroyed(victim);
+        this.emit('moduleBroken', { id: victim.id, part: MODULE_LEG, legIndex: idx, legsDestroyed: victim.legsDestroyed });
+        if (before !== victim.legsDestroyed) this.sendMe(victim);
+      }
+      this.sendMe(victim);
+      return false;
+    }
+    if (part === MODULE_CHEST) {
+      m.chest = Math.max(0, m.chest - dmg);
+      if (m.chest === 0 && !m.chestBroken) {
+        m.chestBroken = true;
+        this.emit('moduleBroken', { id: victim.id, part: MODULE_CHEST });
+      }
+      // 胸部血量耗尽后：子弹有概率直接伤害核心
+      if (m.chestBroken && Math.random() < CORE_HIT_CHANCE) {
+        this.sendMe(victim);
+        return this.damageModule(victim, MODULE_CORE, dmg, killerId, now, null);
+      }
+      this.sendMe(victim);
+      return false;
+    }
+    if (part === MODULE_CORE) {
+      m.core = Math.max(0, m.core - dmg);
+      if (m.core <= 0) {
+        this.killPlayer(victim, killerId, now, 'core');
+        return true;
+      }
+      this.sendMe(victim);
+      return false;
+    }
+    return false;
+  }
+
+  killPlayer(victim, killerId, now, cause) {
+    if (!victim.alive) return;
+    victim.alive = false;
+    victim.deaths++;
+    const killer = this.players.get(killerId);
+    const validKill = killer && killer !== victim && killer.alive &&
+      (!isTeamMode(this.mode) || killer.team !== victim.team);
+    if (validKill) {
+      killer.kills++;
+      killer.score += (this.mode === 'zone') ? 10 : 100;
+      this.sendMe(killer);
+    }
+    this.killfeed.unshift({
+      id: Math.random().toString(36).slice(2, 8),
+      killer: killer ? killer.name : (cause === 'suicide' ? '自爆' : '?'),
+      victim: victim.name,
+      ts: now,
+    });
+    if (this.killfeed.length > KILLFEED_MAX) this.killfeed.pop();
+    this.emit('kill', {
+      victimId: victim.id,
+      killerId: killer ? killer.id : null,
+      killerName: killer ? killer.name : (cause === 'suicide' ? '自爆' : '?'),
+      victimName: victim.name,
+      cause,
+    });
+    if (this.mode === 'duel') {
+      // 死斗：消耗一台机甲，两台都用完则出局不可复活
+      victim.mechIndex++;
+      victim.lives = Math.max(0, victim.mechs.length - victim.mechIndex);
+      victim.respawnAt = (victim.mechIndex < victim.mechs.length) ? now + this.cfg.respawnMs : 0;
+      this.emit('duel:lives', { id: victim.id, lives: victim.lives, mechIndex: victim.mechIndex });
+    } else {
+      victim.respawnAt = now + this.cfg.respawnMs;
+    }
+    this.sendMe(victim);
+  }
+
+  respawn(p) {
+    const mechCfg = p.mechs[Math.min(p.mechIndex, p.mechs.length - 1)] || p.mechs[0];
+    this.applyMech(p, mechCfg);
+    const s = this.pickSpawn(isTeamMode(this.mode) ? p.team : null);
+    p.pos.x = s.x; p.pos.y = 0; p.pos.z = s.z;
+    p.vel.x = 0; p.vel.y = 0; p.vel.z = 0;
+    p.alive = true;
+    p.respawnAt = 0;
+    this.sendMe(p);
+  }
+
+  // ---------- 物理 ----------
+  physics(p, dt) {
+    // 重力
+    p.vel.y -= this.cfg.gravity * dt;
+    if (p.vel.y < -MAX_FALL) p.vel.y = -MAX_FALL;
+    // 腿部损毁减速 × 旗手惩罚
+    const legMul = mechSpeedMul(p.mechType, p.legsDestroyed);
+    const carrierMul = (this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_SPEED_MUL : 1;
+    const spd = this.cfg.moveSpeed * legMul * carrierMul;
+    // 水平速度（朝向由 yaw 决定）
+    const sin = Math.sin(p.yaw), cos = Math.cos(p.yaw);
+    const fx = -sin, fz = -cos;
+    const rx = cos, rz = -sin;
+    if (spd <= 0) {
+      p.vel.x = 0; p.vel.z = 0; // 蜘蛛 6 腿全毁：失去行动能力
+    } else {
+      p.vel.x = (fx * p.input.fwd + rx * p.input.strafe) * spd;
+      p.vel.z = (fz * p.input.fwd + rz * p.input.strafe) * spd;
+    }
+
+    const wasGrounded = p.grounded;
+    p.grounded = false;
+
+    moveAxis(p.pos, p.vel, 'x', dt, colliders);
+    moveAxis(p.pos, p.vel, 'z', dt, colliders);
+    if (moveAxis(p.pos, p.vel, 'y', dt, colliders)) p.grounded = true;
+
+    if (p.pos.y <= 0 && p.vel.y <= 0) {
+      p.pos.y = 0; p.vel.y = 0; p.grounded = true;
+    }
+    const half = MAP.size.x / 2 - PLAYER_R;
+    p.pos.x = clamp(p.pos.x, -half, half);
+    p.pos.z = clamp(p.pos.z, -half, half);
+
+    for (const pad of MAP.jumpPads) {
+      const dx = p.pos.x - pad.x, dz = p.pos.z - pad.z;
+      if (dx * dx + dz * dz <= pad.radius * pad.radius && p.vel.y <= 0.5) {
+        p.vel.y = pad.strength;
+      }
+    }
+
+    if (p.input.jump && (p.grounded || wasGrounded) && spd > 0) {
+      p.vel.y = this.cfg.jumpVel * ((this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_JUMP_MUL : 1);
+      p.grounded = false;
+    }
+  }
+
+  checkPickups(p, now) {
+    // 旗手惩罚：不能捡血包
+    if (this.mode === 'ctf' && this.isFlagCarrier(p.id) && CTF_CARRIER_NO_HEAL) return;
+    for (const pk of this.pickups) {
+      if (!pk.active) continue;
+      const dx = p.pos.x - pk.x, dz = p.pos.z - pk.z;
+      if (dx * dx + dz * dz <= PICKUP_RANGE * PICKUP_RANGE) {
+        pk.active = false;
+        pk.respawnAt = now + PICKUP_RESPAWN_MS;
+        const heal = this.cfg.pickupHeal;
+        const m = p.mech;
+        let healed = false;
+        if (m.chest < m.chestMax) { m.chest = Math.min(m.chestMax, m.chest + heal); healed = true; }
+        // 修复受损（未完全损毁）的腿部；损毁腿需重生才能恢复
+        for (let i = 0; i < m.legs.length; i++) {
+          if (m.legs[i] > 0 && m.legs[i] < MECHS[p.mechType].legHp) {
+            m.legs[i] = Math.min(MECHS[p.mechType].legHp, m.legs[i] + heal);
+            healed = true;
+          }
+        }
+        if (healed) this.sendMe(p);
+      }
+    }
+  }
+
+  updatePickups(now) {
+    for (const pk of this.pickups) {
+      if (!pk.active && pk.respawnAt && now >= pk.respawnAt) {
+        pk.active = true;
+        pk.respawnAt = 0;
+      }
+    }
+  }
+
+  // ---------- 占点 ----------
   updateZone(now) {
     if (now >= this.zone.nextMoveAt) {
       let next;
@@ -552,7 +1055,7 @@ class Game {
   }
 
   // 对局结束：统计 → 广播 → 通知房间管理器回大厅
-  endGame() {
+  endGame(winnerTeam) {
     if (this._ended || !this.active) return;
     this._ended = true;
     this.active = false;
@@ -563,7 +1066,7 @@ class Game {
     const stats = [];
     for (const p of this.players.values()) {
       stats.push({
-        id: p.id, name: p.name, team: p.team,
+        id: p.id, name: p.name, team: p.team, mechType: p.mechType,
         kills: p.kills, deaths: p.deaths, score: Math.floor(p.score),
       });
     }
@@ -572,188 +1075,47 @@ class Game {
     if (this.mode === 'ctf' && this.ctf) {
       ctfResult = { roundWins: this.ctf.roundWins, winnerTeam: this.ctf.roundWins[0] === this.ctf.roundWins[1] ? null : (this.ctf.roundWins[0] > this.ctf.roundWins[1] ? 0 : 1) };
     }
-    this.emit('game:over', { stats, durationMs: this.durationMs, mode: this.mode, ctf: ctfResult });
+    let duelResult = null;
+    if (this.mode === 'duel' && this.duel) {
+      let wt = (winnerTeam === 0 || winnerTeam === 1) ? winnerTeam : null;
+      if (wt === null) {
+        // 到时：按队伍总击杀判定（平局则 null）
+        const k = [0, 0];
+        for (const p of this.players.values()) k[p.team] += p.kills;
+        wt = k[0] === k[1] ? null : (k[0] > k[1] ? 0 : 1);
+      }
+      duelResult = { winnerTeam: wt };
+    }
+    this.emit('game:over', { stats, durationMs: this.durationMs, mode: this.mode, ctf: ctfResult, duel: duelResult });
     console.log(`[neon-arena][${this.roomId}] 对局结束`);
     if (this.hooks.onGameOver) this.hooks.onGameOver(stats);
   }
 
-  respawn(p) {
-    const s = this.pickSpawn(this.mode === 'ctf' ? p.team : null);
-    p.pos.x = s.x; p.pos.y = 0; p.pos.z = s.z;
-    p.vel.x = 0; p.vel.y = 0; p.vel.z = 0;
-    p.health = this.cfg.maxHealth;
-    p.alive = true;
-    p.respawnAt = 0;
-    p.fireCd = 0.5;
-    this.sendMe(p);
-  }
-
-  physics(p, dt) {
-    // 重力
-    p.vel.y -= this.cfg.gravity * dt;
-    if (p.vel.y < -MAX_FALL) p.vel.y = -MAX_FALL;
-    // 旗手惩罚：移速降低
-    const carrierMul = (this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_SPEED_MUL : 1;
-    // 水平速度（朝向由 yaw 决定）
-    const sin = Math.sin(p.yaw), cos = Math.cos(p.yaw);
-    const fx = -sin, fz = -cos;
-    const rx = cos, rz = -sin;
-    p.vel.x = (fx * p.input.fwd + rx * p.input.strafe) * this.cfg.moveSpeed * carrierMul;
-    p.vel.z = (fz * p.input.fwd + rz * p.input.strafe) * this.cfg.moveSpeed * carrierMul;
-
-    const wasGrounded = p.grounded;
-    p.grounded = false;
-
-    moveAxis(p.pos, p.vel, 'x', dt, colliders);
-    moveAxis(p.pos, p.vel, 'z', dt, colliders);
-    if (moveAxis(p.pos, p.vel, 'y', dt, colliders)) p.grounded = true;
-
-    if (p.pos.y <= 0 && p.vel.y <= 0) {
-      p.pos.y = 0; p.vel.y = 0; p.grounded = true;
-    }
-    const half = MAP.size.x / 2 - PLAYER_R;
-    p.pos.x = clamp(p.pos.x, -half, half);
-    p.pos.z = clamp(p.pos.z, -half, half);
-
-    for (const pad of MAP.jumpPads) {
-      const dx = p.pos.x - pad.x, dz = p.pos.z - pad.z;
-      if (dx * dx + dz * dz <= pad.radius * pad.radius && p.vel.y <= 0.5) {
-        p.vel.y = pad.strength;
-      }
-    }
-
-    if (p.input.jump && (p.grounded || wasGrounded)) {
-      // 旗手惩罚：跳跃降低
-      p.vel.y = this.cfg.jumpVel * ((this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_JUMP_MUL : 1);
-      p.grounded = false;
-    }
-  }
-
-  shoot(p) {
-    const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
-    this.projectiles.push({
-      owner: p.id,
-      x: p.pos.x, y: p.pos.y + EYE_H, z: p.pos.z,
-      dx: -Math.sin(p.yaw) * cp,
-      dy: sp,
-      dz: -Math.cos(p.yaw) * cp,
-      life: this.cfg.projLife,
-    });
-    p.fireCd = this.cfg.fireCd;
-  }
-
-  updateProjectiles(dt, now) {
-    const next = [];
-    for (const pr of this.projectiles) {
-      const x0 = pr.x, y0 = pr.y, z0 = pr.z;
-      pr.x += pr.dx * this.cfg.projSpeed * dt;
-      pr.y += pr.dy * this.cfg.projSpeed * dt;
-      pr.z += pr.dz * this.cfg.projSpeed * dt;
-      pr.life -= dt;
-      if (pr.life <= 0) continue;
-      const seg = Math.hypot(pr.x - x0, pr.y - y0, pr.z - z0);
-      const steps = Math.max(1, Math.ceil(seg / 0.3));
-      let dead = false;
-      for (let i = 1; i <= steps; i++) {
-        const f = i / steps;
-        const x = x0 + (pr.x - x0) * f;
-        const y = y0 + (pr.y - y0) * f;
-        const z = z0 + (pr.z - z0) * f;
-        if (this.hitColliderAt(x, y, z)) { dead = true; break; }
-        for (const p of this.players.values()) {
-          if (!p.alive || !p.connected || p.id === pr.owner) continue;
-          // CTF：不攻击同队
-          if (this.mode === 'ctf' && p.team === this.players.get(pr.owner).team) continue;
-          const cx = p.pos.x, cy = p.pos.y + 0.9, cz = p.pos.z;
-          const dx = x - cx, dy = y - cy, dz = z - cz;
-          if (dx * dx + dy * dy + dz * dz < 0.8 * 0.8) {
-            this.damage(p, pr.owner, now);
-            dead = true;
-            break;
-          }
-        }
-        if (dead) break;
-      }
-      if (!dead) next.push(pr);
-    }
-    this.projectiles = next;
-  }
-
-  hitColliderAt(x, y, z) {
-    for (const c of colliders) {
-      if (x > c.minX - PROJ_R && x < c.maxX + PROJ_R &&
-        y > c.minY - PROJ_R && y < c.maxY + PROJ_R &&
-        z > c.minZ - PROJ_R && z < c.maxZ + PROJ_R) return true;
-    }
-    return false;
-  }
-
-  damage(victim, killerId, now) {
-    // 旗手惩罚：受击伤害 +50%
-    const dmg = this.cfg.dmg * ((this.mode === 'ctf' && this.isFlagCarrier(victim.id)) ? CTF_CARRIER_DMG_MUL : 1);
-    victim.health -= dmg;
-    const killer = this.players.get(killerId);
-    if (victim.health <= 0) {
-      victim.health = 0;
-      victim.alive = false;
-      victim.deaths++;
-      victim.respawnAt = now + this.cfg.respawnMs;
-      if (killer && killer !== victim && killer.alive && (this.mode !== 'ctf' || killer.team !== victim.team)) {
-        killer.kills++;
-        killer.score += (this.mode === 'zone') ? 10 : 100;
-        this.sendMe(killer);
-      }
-      this.killfeed.unshift({
-        id: Math.random().toString(36).slice(2, 8),
-        killer: killer ? killer.name : '?',
-        victim: victim.name,
-        ts: now,
-      });
-      if (this.killfeed.length > KILLFEED_MAX) this.killfeed.pop();
-      this.emit('kill', {
-        victimId: victim.id,
-        killerId: killer ? killer.id : null,
-        killerName: killer ? killer.name : '?',
-        victimName: victim.name,
-      });
-    }
-    this.sendMe(victim);
-  }
-
-  checkPickups(p, now) {
-    // 旗手惩罚：不能捡血包
-    if (this.mode === 'ctf' && this.isFlagCarrier(p.id) && CTF_CARRIER_NO_HEAL) return;
-    for (const pk of this.pickups) {
-      if (!pk.active) continue;
-      const dx = p.pos.x - pk.x, dz = p.pos.z - pk.z;
-      if (dx * dx + dz * dz <= PICKUP_RANGE * PICKUP_RANGE) {
-        pk.active = false;
-        pk.respawnAt = now + PICKUP_RESPAWN_MS;
-        if (p.health < this.cfg.maxHealth) {
-          p.health = Math.min(this.cfg.maxHealth, p.health + this.cfg.pickupHeal);
-          this.sendMe(p);
-        }
-      }
-    }
-  }
-
-  updatePickups(now) {
-    for (const pk of this.pickups) {
-      if (!pk.active && pk.respawnAt && now >= pk.respawnAt) {
-        pk.active = true;
-        pk.respawnAt = 0;
-      }
-    }
-  }
-
   // ---------- broadcast ----------
   pubMe(p) {
+    const now = Date.now();
     return {
       id: p.id, name: p.name, color: p.color, team: p.team,
       carrying: this.mode === 'ctf' && this.isFlagCarrier(p.id),
       x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw,
-      health: p.health, score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
-      alive: p.alive, respawnIn: Math.max(0, p.respawnAt - Date.now()),
+      mechType: p.mechType,
+      mech: {
+        legs: p.mech.legs, chest: p.mech.chest, chestMax: p.mech.chestMax, core: p.mech.core,
+        chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
+      },
+      weapons: p.weaponState.map((ws) => ({
+        type: ws.type,
+        ammo: (ws.ammo !== undefined) ? ws.ammo : null,
+        reloading: !!ws.reloading,
+        reloadPct: ws.reloading
+          ? clamp(1 - (ws.reloadEndsAt - now) / WEAPONS[ws.type].reloadMs, 0, 1)
+          : (ws.ammo !== undefined ? ws.ammo / WEAPONS[ws.type].mag : 1),
+        charge: (ws.charge !== undefined) ? ws.charge : 1,
+      })),
+      lives: this.mode === 'duel' ? p.lives : null,
+      mechIndex: this.mode === 'duel' ? p.mechIndex : null,
+      score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
+      alive: p.alive, respawnIn: Math.max(0, p.respawnAt - now),
     };
   }
 
@@ -769,10 +1131,18 @@ class Game {
         id: p.id, name: p.name, color: p.color, team: p.team,
         carrying: this.mode === 'ctf' && this.isFlagCarrier(p.id),
         x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw,
+        mechType: p.mechType,
+        weapons: p.weapons,
+        mech: {
+          legs: p.mech.legs, chest: p.mech.chest, core: p.mech.core,
+          chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
+        },
+        lives: this.mode === 'duel' ? p.lives : null,
+        mechIndex: this.mode === 'duel' ? p.mechIndex : null,
         alive: p.alive, connected: p.connected, kills: p.kills, deaths: p.deaths, score: p.score,
       });
     }
-    const projs = this.projectiles.map((pr) => ({ x: pr.x, y: pr.y, z: pr.z }));
+    const projs = this.projectiles.map((pr) => ({ kind: pr.kind, x: pr.x, y: pr.y, z: pr.z }));
     const pickups = this.pickups.map((pk) => ({ id: pk.id, x: pk.x, z: pk.z, active: pk.active }));
     let ctf = null;
     if (this.mode === 'ctf' && this.ctf) {
@@ -793,10 +1163,21 @@ class Game {
         })),
       };
     }
+    let duel = null;
+    if (this.mode === 'duel' && this.duel) {
+      duel = {
+        bases: this.duel.bases.map((b) => ({
+          team: b.team, x: b.x, z: b.z, coreAlive: b.coreAlive, deploy: b.deploy,
+        })),
+        deployNeed: this.duel.deployNeed,
+        winnerTeam: this.duel.winnerTeam,
+      };
+    }
     this.emit('state', {
       t: now, mode: this.mode,
       zone: { x: this.zone.x, z: this.zone.z, y: this.zone.y, r: ZONE_R, nextMoveAt: this.zone.nextMoveAt },
-      players, projectiles: projs, pickups, killfeed: this.killfeed, ctf,
+      players, projectiles: projs, pickups, killfeed: this.killfeed, ctf, duel,
+      shots: this.shots, beams: this.beams, explosions: this.explosions,
     });
   }
 }

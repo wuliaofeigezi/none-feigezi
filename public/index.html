@@ -98,6 +98,71 @@
   .ctf-match-result{color:#ffe9a8;font-size:15px;text-align:center;margin:10px 0 4px;font-weight:700;}
   .ctf-team-tag{font-size:12px;margin-left:6px;}
   @media (max-width:480px){ .panel{padding:16px;} .panel h1{font-size:24px;} }
+
+  /* ===== 机库（原大厅） ===== */
+  .hangar-panel{width:min(860px,94vw);}
+  .hangar-row .btn{margin-left:0;}
+  .mode-btns{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+  .mode-btn{padding:8px 16px;border-radius:8px;border:1px solid #33408f;background:#12173a;color:#cfe0ff;cursor:pointer;font-size:14px;transition:.15s;}
+  .mode-btn:hover{border-color:#4f6bff;}
+  .mode-btn.active{border-color:#ffb84a;background:linear-gradient(180deg,#3a2a10,#241a08);color:#ffd98a;box-shadow:0 0 12px rgba(255,184,74,.35);}
+  .hangar-slots{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;}
+  .mech-card{flex:1;min-width:300px;border:1px solid #2b3a7a;border-radius:12px;background:#0e1230;padding:10px;}
+  .mech-preview{width:100%;height:170px;border-radius:8px;background:radial-gradient(ellipse at 50% 60%,#1a2350 0%,#0a0e22 80%);overflow:hidden;position:relative;}
+  .mech-preview canvas{display:block;width:100%;height:100%;}
+  .mech-name{text-align:center;font-size:14px;font-weight:700;color:#7dd3fc;margin:8px 0 6px;}
+  .weapon-slots{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;}
+  .weapon-slot{flex:1;min-width:70px;padding:5px 6px;border-radius:6px;border:1px solid #33408f;background:#101432;color:#cfe0ff;font-size:11px;cursor:pointer;text-align:center;transition:.15s;}
+  .weapon-slot:hover{border-color:#4f6bff;background:#141a42;}
+  .weapon-slot .ws-name{display:block;font-weight:700;font-size:11px;}
+  .weapon-slot .ws-type{display:block;font-size:9px;color:#8fa3d8;}
+  .weapon-slot.w-gau12 .ws-name{color:#7df9ff;}
+  .weapon-slot.w-laser .ws-name{color:#ff9db8;}
+  .weapon-slot.w-loiter .ws-name{color:#ffd98a;}
+
+  /* ===== 机甲模块 HUD ===== */
+  #moduleHud{position:absolute;left:14px;bottom:90px;width:210px;background:rgba(5,10,25,.72);border:1px solid rgba(125,249,255,.3);border-radius:10px;padding:8px 10px;pointer-events:none;}
+  .mh-title{font-size:11px;color:#7dd3fc;margin-bottom:4px;}
+  .mh-row{display:flex;align-items:center;gap:6px;font-size:11px;color:#cfe0ff;margin-top:3px;}
+  .mh-row span{width:14px;color:#8fa3d8;}
+  .mh-row b{width:34px;text-align:right;color:#fff;}
+  .mh-track{flex:1;height:9px;background:rgba(255,255,255,.12);border-radius:5px;overflow:hidden;}
+  .mh-track > div{height:100%;border-radius:5px;transition:width .15s;}
+  #mhChest{background:linear-gradient(90deg,#3b82f6,#22d3ee);}
+  #mhCore{background:linear-gradient(90deg,#f59e0b,#ff5c7a);}
+  #mhLegs .mh-leg{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:#cfe0ff;}
+  #mhLegs .mh-leg span{width:14px;color:#8fa3d8;}
+  .mh-leg .mh-track > div{background:linear-gradient(90deg,#10b981,#84cc16);}
+  .mh-leg.destroyed .mh-track > div{background:#ff5c7a;}
+  .mh-leg.destroyed span{color:#ff5c7a;}
+
+  /* ===== 武器状态 HUD ===== */
+  #weaponHud{position:absolute;right:14px;bottom:90px;display:flex;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none;}
+  .w-row{background:rgba(5,10,25,.7);border:1px solid rgba(125,249,255,.25);border-radius:8px;padding:4px 10px;font-size:11px;color:#cfe0ff;min-width:150px;text-align:right;}
+  .w-row .wn{font-weight:700;}
+  .w-row .ws{font-size:10px;color:#7df9ff;}
+  .w-row.reloading .ws{color:#ffb84a;}
+  .w-row.empty .ws{color:#ff5c7a;}
+
+  /* ===== 死斗 HUD ===== */
+  #duelHud{position:absolute;top:70px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none;z-index:5;}
+  #duelLives{font-size:14px;font-weight:700;color:#ffe9a8;background:rgba(10,13,30,.7);border:1px solid #2b3a7a;border-radius:10px;padding:5px 14px;display:inline-block;margin-bottom:6px;}
+  .duel-cores{display:flex;gap:10px;justify-content:center;}
+  .duel-core{width:170px;background:rgba(10,13,30,.7);border:1px solid #2b3a7a;border-radius:8px;padding:4px 8px;font-size:11px;color:#cfe0ff;}
+  .duel-core.red span{color:#ff5c7a;}
+  .duel-core.blue span{color:#5c9cff;}
+  .duel-core .mh-track{height:8px;margin-top:3px;}
+  .duel-core-fill{height:100%;border-radius:5px;width:0;}
+  .duel-core.red .duel-core-fill{background:#ff5c7a;}
+  .duel-core.blue .duel-core-fill{background:#5c9cff;}
+  .duel-core.down .duel-core-fill{background:#444 !important;}
+
+  /* ===== 暂停菜单 / 自杀进度 ===== */
+  #pauseMenu{position:fixed;inset:0;z-index:90;background:rgba(5,8,20,.7);display:flex;align-items:center;justify-content:center;}
+  .pm-panel{background:rgba(14,18,44,.96);border:1px solid #4f6bff;border-radius:14px;padding:24px 30px;display:flex;flex-direction:column;gap:10px;min-width:220px;}
+  .pm-panel h2{margin:0 0 6px;color:#fff;text-align:center;}
+  #suicideBar{position:fixed;bottom:120px;left:50%;transform:translateX(-50%);z-index:95;width:280px;background:rgba(20,8,14,.9);border:1px solid #ff5c7a;border-radius:10px;padding:8px 12px;color:#ffd7e4;font-size:12px;text-align:center;}
+  #suicideFill{height:6px;width:0;background:#ff5c7a;border-radius:3px;margin-bottom:6px;transition:width .1s linear;}
 </style>
 </head>
 <body>
@@ -136,6 +201,35 @@
     <div id="jumpBtn">跳跃</div>
   </div>
 
+  <!-- 机甲模块 HUD -->
+  <div id="moduleHud">
+    <div class="mh-title">模块</div>
+    <div id="mhLegs"></div>
+    <div class="mh-row"><span>胸</span><div class="mh-track"><div id="mhChest"></div></div><b id="mhChestTxt">250</b></div>
+    <div class="mh-row"><span>核</span><div class="mh-track"><div id="mhCore"></div></div><b id="mhCoreTxt">100</b></div>
+  </div>
+  <!-- 武器状态 HUD -->
+  <div id="weaponHud"></div>
+  <!-- 死斗 HUD -->
+  <div id="duelHud" class="hidden">
+    <div id="duelLives"></div>
+    <div class="duel-cores">
+      <div class="duel-core red"><span>🔴 红核</span><div class="mh-track"><div id="duelCore0" class="duel-core-fill"></div></div></div>
+      <div class="duel-core blue"><span>🔵 蓝核</span><div class="mh-track"><div id="duelCore1" class="duel-core-fill"></div></div></div>
+    </div>
+  </div>
+  <!-- 暂停菜单 -->
+  <div id="pauseMenu" class="hidden">
+    <div class="pm-panel">
+      <h2>⏸ 暂停</h2>
+      <button id="pauseContinueBtn" class="btn btn-primary">继续游戏</button>
+      <button id="pauseSuicideBtn" class="btn btn-danger">💥 自杀</button>
+      <button id="pauseLeaveBtn" class="btn">离开对局</button>
+    </div>
+  </div>
+  <!-- 长按 J 自杀进度 -->
+  <div id="suicideBar" class="hidden"><div id="suicideFill"></div><span>长按 J 自杀中…</span></div>
+
   <!-- CTF 夺旗卡牌赛 UI -->
   <div id="ctfUI" class="hidden">
     <div class="ctf-top">
@@ -153,26 +247,39 @@
   </div>
 </div>
 
-<!-- 大厅页 -->
+<!-- 机库页（原大厅） -->
 <div id="lobbyPage" class="page">
-  <div class="panel">
-    <h1>霓虹竞技场<span>NEON ARENA</span></h1>
-    <p class="sub">3D 联机射击 · 房间大厅</p>
-    <div class="row">
+  <div class="panel hangar-panel">
+    <h1>机库<span>NEON HANGAR</span></h1>
+    <p class="sub">War Robots 风格机甲对战 · 装配战斗模块后出击</p>
+    <div class="row hangar-row">
       <input id="lobbyName" maxlength="16" placeholder="输入你的名字" value="玩家"/>
-      <select id="createModeSelect" title="创建房间的默认模式">
-        <option value="ffa">🔫 死斗</option>
-        <option value="zone">🚩 占点</option>
-        <option value="ctf">🏳️ 夺旗卡牌</option>
-      </select>
-      <button id="createRoomBtn" class="btn btn-primary">＋ 创建房间</button>
+      <button id="battleBtn" class="btn btn-primary">⚔ 战斗</button>
       <button id="quickJoinBtn" class="btn">⚡ 快速加入</button>
       <button id="refreshRoomsBtn" class="btn">🔄 刷新</button>
     </div>
+    <div class="mode-btns" id="modeBtns">
+      <button class="mode-btn active" data-mode="duel">⚔ 死斗</button>
+      <button class="mode-btn" data-mode="ctf">🏳️ 战旗</button>
+      <button class="mode-btn" data-mode="zone">🚩 占点</button>
+    </div>
+    <div class="hangar-slots">
+      <div class="mech-card" id="mechCard0">
+        <div class="mech-preview" id="mechPreview0"></div>
+        <div class="mech-name">🤖 人形战斗机器人</div>
+        <div class="weapon-slots" id="weaponSlots0"></div>
+      </div>
+      <div class="mech-card" id="mechCard1">
+        <div class="mech-preview" id="mechPreview1"></div>
+        <div class="mech-name">🕷 蜘蛛机器人</div>
+        <div class="weapon-slots" id="weaponSlots1"></div>
+      </div>
+    </div>
     <div id="roomList" class="room-list"></div>
     <div class="help" id="helpText">
-      <b>操作</b>：WASD 移动 · 点击画面锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃<br/>
-      若锁定不可用：按住<b>鼠标右键拖拽</b>旋转视角。💡 四角发光传送台可弹射上天，中央高台是制高点
+      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃<br/>
+      <b>ESC</b> 打开菜单（可自杀）· <b>长按 J 3 秒</b> 也可自杀<br/>
+      💡 腿部损毁会减速（人形 1 腿 -50%、2 腿 -80%；蜘蛛按 5%/25%/50%/80%/95% 递增、6 腿瘫痪），胸部耗尽后核心可能被击穿！
     </div>
     <div id="connStatus">正在连接服务器…</div>
   </div>

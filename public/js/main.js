@@ -10,7 +10,9 @@ import * as THREE from './three.module.min.js';
     lobbyPage = $('lobbyPage'), roomPage = $('roomPage'), gameOverPage = $('gameOverPage'),
     lobbyName = $('lobbyName'), connStatus = $('connStatus'),
     roomListEl = $('roomList'),
-    createRoomBtn = $('createRoomBtn'), createModeSelect = $('createModeSelect'),
+    battleBtn = $('battleBtn'), modeBtns = $('modeBtns'),
+    mechPreview0 = $('mechPreview0'), mechPreview1 = $('mechPreview1'),
+    weaponSlots0 = $('weaponSlots0'), weaponSlots1 = $('weaponSlots1'),
     quickJoinBtn = $('quickJoinBtn'), refreshRoomsBtn = $('refreshRoomsBtn'),
     roomTitle = $('roomTitle'), roomCode = $('roomCode'), copyCodeBtn = $('copyCodeBtn'),
     leaveRoomBtn = $('leaveRoomBtn'), roomSettings = $('roomSettings'),
@@ -30,7 +32,19 @@ import * as THREE from './three.module.min.js';
     ctfUI = $('ctfUI'), ctfRedScore = $('ctfRedScore'), ctfBlueScore = $('ctfBlueScore'),
     ctfRoundInfo = $('ctfRoundInfo'), ctfFlagStatus = $('ctfFlagStatus'), ctfCardInfo = $('ctfCardInfo'),
     votePanel = $('votePanel'), voteCountdown = $('voteCountdown'), voteCards = $('voteCards'), voteStatus = $('voteStatus'),
-    banner = $('banner');
+    banner = $('banner'),
+    // 机甲模块 HUD
+    moduleHudEl = $('moduleHud'), mhLegs = $('mhLegs'),
+    mhChest = $('mhChest'), mhChestTxt = $('mhChestTxt'),
+    mhCore = $('mhCore'), mhCoreTxt = $('mhCoreTxt'),
+    weaponHud = $('weaponHud'),
+    // 死斗 HUD
+    duelHud = $('duelHud'), duelLives = $('duelLives'),
+    duelCore0 = $('duelCore0'), duelCore1 = $('duelCore1'),
+    // 暂停 / 自杀
+    pauseMenu = $('pauseMenu'), pauseContinueBtn = $('pauseContinueBtn'),
+    pauseSuicideBtn = $('pauseSuicideBtn'), pauseLeaveBtn = $('pauseLeaveBtn'),
+    suicideBar = $('suicideBar'), suicideFill = $('suicideFill');
 
   // ===== 常量（单一事实来源：public/js/neon-shared.js，禁止在此重复定义） =====
   const NS = window.NeonShared;
@@ -102,6 +116,25 @@ import * as THREE from './three.module.min.js';
   let padMeshes = [];
   let audioCtx = null;
   let scoreRows = [];
+
+  // ===== 机库状态 =====
+  let hangarRenderers = [];      // 机库 3D 预览 renderer
+  let hangarModels = [null, null];
+  let selectedMode = 'duel';     // duel(死斗) | ctf(战旗) | zone(占点)
+  let mechConfigs = [
+    { type: 'humanoid', weapons: ['gau12', 'gau12', 'gau12', 'gau12'] },
+    { type: 'spider', weapons: ['gau12', 'gau12', 'gau12'] },
+  ];
+  // ===== 武器视觉状态 =====
+  let tracerPool = [];           // 机炮曳光
+  let beamMeshes = [];           // 激光束
+  let loiterMeshes = [];         // 巡飞弹（带轨迹）
+  let explosionPool = [];        // 爆炸闪光
+  let duelState = null;          // 死斗 HUD 状态
+  // ===== 暂停 / 自杀 =====
+  let pauseOpen = false;
+  let suicideHeldAt = 0;         // 长按 J 起始时间
+  let suicideTimer = null;
 
   // ===== Three.js =====
   let renderer, scene, camera;
@@ -250,6 +283,24 @@ import * as THREE from './three.module.min.js';
       }
     });
 
+    // ---------- 机甲模块 / 死斗 ----------
+    socket.on('moduleBroken', (d) => {
+      if (d && d.id === (me && me.id)) {
+        if (d.part === 'leg') showBanner('🦿 腿部模块损毁！移动速度降低！', 2200);
+        else if (d.part === 'chest') showBanner('💔 胸部装甲耗尽！核心暴露！', 2500);
+        beep(300, 0.15, 'square', 0.08);
+      }
+    });
+    socket.on('duel:core', (d) => {
+      showBanner('💥 基地核心被摧毁！' + (d && d.winnerTeam === 0 ? '🔴红队' : '🔵蓝队') + ' 获胜！', 4000);
+      beep(220, 0.5, 'sawtooth', 0.12);
+    });
+    socket.on('duel:lives', (d) => {
+      if (d && d.id === (me && me.id) && d.lives === 0) {
+        showBanner('💥 你的机甲已全部损毁，出局！', 3000);
+      }
+    });
+
     // ---------- 游戏内 ----------
     socket.on('welcome', onWelcome);
     socket.on('state', onState);
@@ -275,7 +326,7 @@ import * as THREE from './three.module.min.js';
       return;
     }
     roomListEl.innerHTML = roomList.map((r) => {
-      const modeTxt = r.mode === 'zone' ? '🚩占点' : r.mode === 'ctf' ? '🏳️夺旗卡牌' : '🔫死斗';
+      const modeTxt = r.mode === 'zone' ? '🚩占点' : r.mode === 'ctf' ? '🏳️战旗' : r.mode === 'duel' ? '⚔死斗' : '🔫死竞';
       return `
       <div class="room-row" data-code="${esc(r.code)}">
         <span class="code">${esc(r.code)}</span>
@@ -344,18 +395,486 @@ import * as THREE from './three.module.min.js';
     socket.emit('lobby:list');
   }
 
+  // ---------- 机库（原大厅） ----------
+  const WEAPON_ORDER = ['gau12', 'laser', 'loiter'];
+  const WEAPON_LABEL = { gau12: ['Gau12', '机炮'], laser: ['镭射', '激光'], loiter: ['巡飞', '飞弹'] };
+
+  function initHangar() {
+    if (modeBtns) {
+      modeBtns.querySelectorAll('.mode-btn').forEach((b) => {
+        b.addEventListener('click', () => {
+          selectedMode = b.dataset.mode || 'duel';
+          modeBtns.querySelectorAll('.mode-btn').forEach((x) => x.classList.toggle('active', x === b));
+        });
+      });
+    }
+    renderWeaponSlots(0);
+    renderWeaponSlots(1);
+    setupHangarPreviews();
+    if (battleBtn) battleBtn.addEventListener('click', () => {
+      myName = (lobbyName.value || '玩家').trim().slice(0, 16);
+      socket.emit('room:create', {
+        name: myName + ' 的房间',
+        playerName: myName,
+        sessionId: getSessionId(),
+        mode: selectedMode,
+        mechs: mechConfigs,
+      });
+    });
+  }
+
+  function renderWeaponSlots(slotIdx) {
+    const el = slotIdx === 0 ? weaponSlots0 : weaponSlots1;
+    if (!el) return;
+    const cfg = mechConfigs[slotIdx];
+    el.innerHTML = cfg.weapons.map((w, i) =>
+      '<button class="weapon-slot w-' + w + '" data-i="' + i + '" title="点击切换武器">' +
+      '<span class="ws-name">' + WEAPON_LABEL[w][0] + '</span>' +
+      '<span class="ws-type">' + WEAPON_LABEL[w][1] + '</span></button>').join('');
+    el.querySelectorAll('.weapon-slot').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = parseInt(btn.dataset.i, 10);
+        cfg.weapons[i] = WEAPON_ORDER[(WEAPON_ORDER.indexOf(cfg.weapons[i]) + 1) % WEAPON_ORDER.length];
+        renderWeaponSlots(slotIdx);
+        if (hangarModels[slotIdx] && hangarModels[slotIdx].userData.mounts) {
+          // 刷新预览上的武器挂载
+          const mounts = hangarModels[slotIdx].userData.mounts;
+          mounts.forEach((m) => { for (let c = m.children.length - 1; c >= 0; c--) m.remove(m.children[c]); });
+          cfg.weapons.forEach((w, i) => { if (mounts[i]) mountWeaponVisual(mounts[i], w); });
+        }
+      });
+    });
+  }
+
+  function setupHangarPreviews() {
+    const hosts = [mechPreview0, mechPreview1];
+    hosts.forEach((host, idx) => {
+      if (!host || hangarRenderers[idx]) return;
+      const w = host.clientWidth || 320, h = host.clientHeight || 170;
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(w, h);
+      host.appendChild(renderer.domElement);
+      const scene = new THREE.Scene();
+      scene.add(new THREE.HemisphereLight(0x8899ff, 0x0a0f1e, 0.9));
+      const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+      dir.position.set(30, 50, 20);
+      scene.add(dir);
+      const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+      camera.position.set(idx === 0 ? 3.0 : 3.4, 2.0, 3.8);
+      camera.lookAt(0, 0.85, 0);
+      const model = buildMechModel(mechConfigs[idx].type, { color: idx === 0 ? 0x22d3ee : 0xa855f7 });
+      scene.add(model);
+      hangarModels[idx] = model;
+      const mounts = model.userData.mounts;
+      mechConfigs[idx].weapons.forEach((w, i) => { if (mounts[i]) mountWeaponVisual(mounts[i], w); });
+      hangarRenderers.push({ renderer, scene, camera, spin: 0 });
+    });
+  }
+
+  function renderHangarPreviews(dt) {
+    for (const r of hangarRenderers) {
+      r.spin += dt * 0.5;
+      if (hangarModels[0] && r === hangarRenderers[0]) hangarModels[0].rotation.y = r.spin;
+      if (hangarModels[1] && r === hangarRenderers[1]) hangarModels[1].rotation.y = r.spin;
+      r.renderer.render(r.scene, r.camera);
+    }
+  }
+
+  // ---------- 机甲模型（人形 / 蜘蛛） ----------
+  function stdMat(color, emissive, opts) {
+    return new THREE.MeshStandardMaterial(Object.assign({
+      color: color || 0x888888, emissive: emissive || 0x000000,
+      roughness: 0.5, metalness: 0.35,
+    }, opts || {}));
+  }
+  function box(w, h, d, mat) { return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); }
+
+  function buildMechModel(type, opts) {
+    const g = new THREE.Group();
+    if (type === 'spider') buildSpiderModel(g, opts || {});
+    else buildHumanoidModel(g, opts || {});
+    return g;
+  }
+
+  // 人形战斗机器人：双腿 + 胸部 + 藏于胸部的核心 + 肩部 4 战斗模块槽
+  function buildHumanoidModel(g, o) {
+    const color = o.color || 0x3b82f6;
+    const dark = new THREE.Color(color).multiplyScalar(0.55);
+    const mBody = stdMat(color, 0x0d2a4a);
+    const mDark = stdMat(dark, 0x000000);
+    const mLeg = stdMat(0x8899bb, 0x000000, { metalness: 0.55 });
+    const legs = [];
+    for (let i = 0; i < 2; i++) {
+      const pivot = new THREE.Group();
+      pivot.position.set(i === 0 ? -0.22 : 0.22, 0.9, 0);
+      const thigh = box(0.28, 0.5, 0.28, mLeg); thigh.position.y = -0.25;
+      const shin = box(0.22, 0.45, 0.22, mDark); shin.position.y = -0.72;
+      const foot = box(0.26, 0.1, 0.4, mDark); foot.position.set(0, -0.92, 0.07);
+      pivot.add(thigh, shin, foot);
+      g.add(pivot);
+      legs.push(pivot);
+    }
+    const chest = box(0.95, 0.7, 0.6, mBody);
+    chest.position.y = 1.4;
+    g.add(chest);
+    const core = box(0.32, 0.2, 0.1, new THREE.MeshStandardMaterial({
+      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.9,
+    }));
+    core.position.set(0, 1.4, 0.31);
+    g.add(core);
+    const head = box(0.4, 0.32, 0.32, mDark);
+    head.position.y = 1.86;
+    g.add(head);
+    const eye = box(0.22, 0.1, 0.05, new THREE.MeshStandardMaterial({ color: 0x7df9ff, emissive: 0x22d3ee, emissiveIntensity: 0.8 }));
+    eye.position.set(0, 1.86, 0.17);
+    g.add(eye);
+    // 肩部 4 槽
+    const mounts = [];
+    const mountPos = [[-0.66, 1.6, 0.18], [0.66, 1.6, 0.18], [-0.66, 1.6, -0.18], [0.66, 1.6, -0.18]];
+    for (const [mx, my, mz] of mountPos) {
+      const pivot = new THREE.Group();
+      pivot.position.set(mx, my, mz);
+      pivot.add(box(0.2, 0.12, 0.26, mDark));
+      g.add(pivot);
+      mounts.push(pivot);
+    }
+    g.userData = { type: 'humanoid', legs, chest, core, mounts, gait: 0 };
+  }
+
+  // 蜘蛛机器人：6 条腿 + 胸部 + 核心 + 胸部两侧/顶部共 3 槽
+  function buildSpiderModel(g, o) {
+    const color = o.color || 0xa855f7;
+    const dark = new THREE.Color(color).multiplyScalar(0.55);
+    const mBody = stdMat(color, 0x1a0d2a);
+    const mDark = stdMat(dark, 0x000000);
+    const mLeg = stdMat(0xbb99dd, 0x000000, { metalness: 0.55 });
+    const chest = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 1.1), mBody);
+    chest.position.y = 0.85;
+    g.add(chest);
+    const core = box(0.34, 0.2, 0.1, new THREE.MeshStandardMaterial({
+      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.9,
+    }));
+    core.position.set(0, 0.85, 0.56);
+    g.add(core);
+    // 6 条腿（左右各 3，两段式）
+    const legs = [];
+    const sides = [-1, 1];
+    const zOffs = [-0.62, 0, 0.62];
+    for (let s = 0; s < 2; s++) {
+      for (let zz = 0; zz < 3; zz++) {
+        const pivot = new THREE.Group();
+        pivot.position.set(sides[s] * 0.78, 0.72, zOffs[zz]);
+        const thigh = box(0.1, 0.52, 0.1, mLeg);
+        thigh.position.set(sides[s] * 0.3, -0.26, 0);
+        thigh.rotation.z = -sides[s] * 0.55;
+        const shin = box(0.08, 0.44, 0.08, mDark);
+        shin.position.set(sides[s] * 0.6, -0.62, 0);
+        pivot.add(thigh, shin);
+        g.add(pivot);
+        legs.push(pivot);
+      }
+    }
+    // 胸部两侧 + 顶部 3 槽
+    const mounts = [];
+    const mountPos = [[-0.95, 1.0, 0.1], [0.95, 1.0, 0.1], [0, 1.55, 0]];
+    for (const [mx, my, mz] of mountPos) {
+      const pivot = new THREE.Group();
+      pivot.position.set(mx, my, mz);
+      pivot.add(box(0.24, 0.12, 0.26, mDark));
+      g.add(pivot);
+      mounts.push(pivot);
+    }
+    g.userData = { type: 'spider', legs, chest, core, mounts, gait: 0 };
+  }
+
+  // 武器挂载到战斗模块槽
+  function mountWeaponVisual(mount, type) {
+    let mesh;
+    if (type === 'gau12') {
+      mesh = box(0.14, 0.14, 0.55, new THREE.MeshBasicMaterial({ color: 0x7df9ff }));
+      mesh.position.z = -0.28;
+    } else if (type === 'laser') {
+      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.42, 8), new THREE.MeshBasicMaterial({ color: 0xff5c7a }));
+      mesh.rotation.x = Math.PI / 2;
+      mesh.position.z = -0.22;
+    } else {
+      mesh = box(0.2, 0.16, 0.42, new THREE.MeshBasicMaterial({ color: 0xffb84a }));
+      mesh.position.z = -0.22;
+    }
+    mount.add(mesh);
+  }
+
+  // 腿部步行/瘸腿动画（按损毁腿数）
+  function animateMechLegs(rp, dt) {
+    const ud = rp.group.userData || {};
+    const legs = ud.legs || [];
+    if (!legs.length) return;
+    // 移动速度 → 步频
+    const spd = rp.target ? Math.hypot(rp.target.x - rp.lastX, rp.target.z - rp.lastZ) / Math.max(dt, 0.001) : 0;
+    rp.lastX = rp.target.x; rp.lastZ = rp.target.z;
+    ud.gait += Math.min(spd, 12) * dt * 3.2;
+    const alive = rp.alive !== false;
+    if (ud.type === 'spider') {
+      // 蜘蛛：6 腿交替小步；损毁腿外撇拖行
+      for (let i = 0; i < legs.length; i++) {
+        const leg = legs[i];
+        const destroyed = rp.legs && rp.legs[i] <= 0;
+        if (!alive) { leg.rotation.x = 0.3; leg.rotation.z = 0; continue; }
+        if (destroyed) {
+          leg.rotation.x = 0.55 + (i % 2) * 0.25; // 抬起拖行
+          leg.rotation.z = (i < 3 ? 1 : -1) * 0.7; // 外撇
+        } else {
+          const side = i < 3 ? 1 : -1;
+          leg.rotation.z = side * 0.35 + Math.sin(ud.gait + i * 1.1) * 0.14;
+          leg.rotation.x = Math.sin(ud.gait * 0.5 + i * 0.9) * 0.18;
+        }
+      }
+    } else {
+      // 人形：双腿交替摆动；损毁腿后拖
+      for (let i = 0; i < legs.length; i++) {
+        const leg = legs[i];
+        const destroyed = rp.legs && rp.legs[i] <= 0;
+        if (!alive) { leg.rotation.x = 0.05; continue; }
+        if (destroyed) {
+          leg.rotation.x = -1.0; // 拖行
+          leg.position.x = (i === 0 ? -0.22 : 0.22) + (i === 0 ? -0.06 : 0.06); // 外撇
+        } else {
+          leg.rotation.x = Math.sin(ud.gait + i * Math.PI) * 0.55 * Math.min(spd, 12) / 12;
+          leg.position.x = i === 0 ? -0.22 : 0.22;
+        }
+      }
+    }
+    // 胸部破碎 → 核心脉冲
+    if (ud.core) {
+      const pulse = rp.chestBroken ? (1 + 0.35 * Math.sin(performance.now() * 0.008)) : 1;
+      ud.core.scale.setScalar(pulse);
+    }
+  }
+
+  // ---------- 武器视觉（曳光/激光束/巡飞弹/爆炸） ----------
+  function getTracer() {
+    for (const t of tracerPool) if (!t.active) { t.active = true; t.mesh.visible = true; return t; }
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 1, 4),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.9 })
+    );
+    const t = { mesh, active: true, life: 0 };
+    scene.add(mesh);
+    tracerPool.push(t);
+    return t;
+  }
+  function updateTracers(shots, dt) {
+    const now = performance.now();
+    for (const t of tracerPool) {
+      if (t.active) {
+        t.life -= dt;
+        if (t.life <= 0) { t.active = false; t.mesh.visible = false; }
+      }
+    }
+    for (const s of shots || []) {
+      const t = getTracer();
+      t.life = 0.12;
+      const a = new THREE.Vector3(s.x1, s.y1, s.z1);
+      const b = new THREE.Vector3(s.x2, s.y2, s.z2);
+      const len = a.distanceTo(b) || 0.01;
+      t.mesh.position.copy(a).add(b).multiplyScalar(0.5);
+      t.mesh.scale.set(1, len, 1);
+      t.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      t.mesh.material.color.setHex(s.hit ? 0xffe9a8 : 0x9ffcff);
+    }
+  }
+  function getBeamMesh() {
+    for (const m of beamMeshes) if (!m.visible) { m.visible = true; return m; }
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.05, 1, 6),
+      new THREE.MeshBasicMaterial({ color: 0xff5c7a, transparent: true, opacity: 0.85 })
+    );
+    mesh.visible = false;
+    scene.add(mesh);
+    beamMeshes.push(mesh);
+    return mesh;
+  }
+  function updateBeams(beams) {
+    const list = beams || [];
+    for (let i = 0; i < beamMeshes.length; i++) {
+      if (i >= list.length) { beamMeshes[i].visible = false; continue; }
+      const b = list[i];
+      const m = getBeamMesh();
+      const a = new THREE.Vector3(b.x1, b.y1, b.z1);
+      const c = new THREE.Vector3(b.x2, b.y2, b.z2);
+      const len = a.distanceTo(c) || 0.01;
+      m.position.copy(a).add(c).multiplyScalar(0.5);
+      m.scale.set(1, len, 1);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), c.clone().sub(a).normalize());
+      m.material.opacity = 0.75 + 0.25 * Math.sin(performance.now() * 0.02);
+    }
+    // 多余的隐藏
+    for (let i = list.length; i < beamMeshes.length; i++) beamMeshes[i].visible = false;
+  }
+  function getLoiterMesh() {
+    for (const m of loiterMeshes) if (!m.active) { m.active = true; m.mesh.visible = true; m.trail.visible = true; return m; }
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffb84a })
+    );
+    const trailGeo = new THREE.BufferGeometry();
+    const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0xffb84a, transparent: true, opacity: 0.7 }));
+    const o = { mesh, trail, active: true, history: [] };
+    scene.add(mesh);
+    scene.add(trail);
+    loiterMeshes.push(o);
+    return o;
+  }
+  function updateLoiterMeshes(projectiles) {
+    const list = projectiles || [];
+    for (let i = 0; i < loiterMeshes.length; i++) {
+      if (i >= list.length) { loiterMeshes[i].active = false; loiterMeshes[i].mesh.visible = false; loiterMeshes[i].trail.visible = false; continue; }
+      const o = getLoiterMesh();
+      const p = list[i];
+      o.mesh.position.set(p.x, p.y, p.z);
+      o.history.push({ x: p.x, y: p.y, z: p.z });
+      if (o.history.length > 8) o.history.shift();
+      if (o.history.length > 1) {
+        const pos = new Float32Array(o.history.length * 3);
+        o.history.forEach((h, j) => { pos[j * 3] = h.x; pos[j * 3 + 1] = h.y; pos[j * 3 + 2] = h.z; });
+        o.trail.geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        o.trail.geometry.setDrawRange(0, o.history.length);
+        o.trail.geometry.computeBoundingSphere();
+      }
+    }
+    for (let i = list.length; i < loiterMeshes.length; i++) { loiterMeshes[i].active = false; loiterMeshes[i].mesh.visible = false; loiterMeshes[i].trail.visible = false; }
+  }
+  function getExplosion() {
+    for (const e of explosionPool) if (!e.active) { e.active = true; e.mesh.visible = true; return e; }
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xffb84a, transparent: true, opacity: 0.9 })
+    );
+    const o = { mesh, active: true, life: 0 };
+    scene.add(mesh);
+    explosionPool.push(o);
+    return o;
+  }
+  function updateExplosions(list, dt) {
+    for (const e of explosionPool) {
+      if (e.active) {
+        e.life -= dt;
+        if (e.life <= 0) { e.active = false; e.mesh.visible = false; }
+        else {
+          const s = 1.6 - e.life * 2;
+          e.mesh.scale.setScalar(Math.max(0.3, s));
+          e.mesh.material.opacity = Math.max(0, e.life / 0.45);
+        }
+      }
+    }
+    for (const x of list || []) {
+      const e = getExplosion();
+      e.life = 0.45;
+      e.mesh.position.set(x.x, x.y, x.z);
+      e.mesh.scale.setScalar(0.3);
+      e.mesh.material.opacity = 0.9;
+    }
+  }
+
+  // ---------- 模块 / 武器 / 死斗 HUD ----------
+  function updateModuleHud(m) {
+    if (!moduleHudEl || !m || !m.mech) return;
+    const cfg = NS.MECHS[m.mechType] || NS.MECHS.humanoid;
+    const mech = m.mech;
+    // 腿部
+    let html = '';
+    mech.legs.forEach((hp, i) => {
+      const destroyed = hp <= 0;
+      html += '<div class="mh-leg' + (destroyed ? ' destroyed' : '') + '">' +
+        '<span>腿' + (i + 1) + '</span>' +
+        '<div class="mh-track"><div style="width:' + clamp((hp / cfg.legHp) * 100, 0, 100) + '%"></div></div></div>';
+    });
+    if (mhLegs) mhLegs.innerHTML = html;
+    if (mhChest) mhChest.style.width = clamp((mech.chest / mech.chestMax) * 100, 0, 100) + '%';
+    if (mhChestTxt) mhChestTxt.textContent = Math.max(0, Math.ceil(mech.chest));
+    if (mhCore) mhCore.style.width = clamp((mech.core / cfg.coreHp) * 100, 0, 100) + '%';
+    if (mhCoreTxt) mhCoreTxt.textContent = Math.max(0, Math.ceil(mech.core));
+  }
+
+  function updateWeaponHud(m) {
+    if (!weaponHud || !m || !m.weapons) return;
+    const rows = m.weapons.map((w) => {
+      const def = NS.WEAPONS[w.type];
+      let status;
+      if (w.type === 'laser') status = '充能 ' + Math.round((w.charge || 0) * 100) + '%';
+      else if (w.reloading) status = '装填中 ' + Math.round((w.reloadPct || 0) * 100) + '%';
+      else status = '备弹 ' + (w.ammo || 0) + '/' + def.mag;
+      const cls = w.reloading ? 'reloading' : '';
+      return '<div class="w-row ' + cls + '"><span class="wn">' + def.name + '</span> <span class="ws">' + status + '</span></div>';
+    }).join('');
+    weaponHud.innerHTML = rows;
+  }
+
+  function updateDuelHud(state) {
+    if (!duelHud || !state) return;
+    duelHud.classList.remove('hidden');
+    duelLives.textContent = me ? ('剩余机甲 ' + (me.lives || 0) + ' 台') : '';
+    const b0 = state.bases && state.bases[0], b1 = state.bases && state.bases[1];
+    if (b0) {
+      duelCore0.style.width = b0.coreAlive ? (b0.deploy / state.deployNeed) * 100 + '%' : '100%';
+      duelCore0.parentElement.classList.toggle('down', !b0.coreAlive);
+    }
+    if (b1) {
+      duelCore1.style.width = b1.coreAlive ? (b1.deploy / state.deployNeed) * 100 + '%' : '100%';
+      duelCore1.parentElement.classList.toggle('down', !b1.coreAlive);
+    }
+  }
+
+  // ---------- 暂停 / 自杀 ----------
+  function setPause(open) {
+    pauseOpen = open;
+    if (pauseMenu) pauseMenu.classList.toggle('hidden', !open);
+    if (open) {
+      document.exitPointerLock && document.exitPointerLock();
+      fire = false;
+      touchFire = false;
+    }
+    if (!open) stopSuicideHold();
+  }
+  function startSuicideHold() {
+    if (!started || !me || !me.alive || pauseOpen || ctfVoting()) return;
+    suicideHeldAt = performance.now();
+    suicideBar.classList.remove('hidden');
+    clearInterval(suicideTimer);
+    suicideTimer = setInterval(() => {
+      const pct = Math.min(100, ((performance.now() - suicideHeldAt) / 3000) * 100);
+      suicideFill.style.width = pct + '%';
+      if (pct >= 100) {
+        socket.emit('suicide');
+        stopSuicideHold();
+      }
+    }, 50);
+  }
+  function stopSuicideHold() {
+    suicideHeldAt = 0;
+    clearInterval(suicideTimer);
+    suicideTimer = null;
+    if (suicideBar) suicideBar.classList.add('hidden');
+    if (suicideFill) suicideFill.style.width = '0%';
+  }
+
   function showGameOver(data) {
     uiState = 'over';
     const myId = me && me.id;
     const stats = (data && data.stats) || [];
     const ctfRes = data && data.ctf;
+    const duelRes = data && data.duel;
     resetGame();
     roomPage.classList.add('hidden');
     hud.classList.add('hidden');
-    const head = ctfRes
-      ? '<div class="ctf-match-result">' + (ctfRes.winnerTeam === null ? '🤝 平局' : (ctfRes.winnerTeam === 0 ? '🔴 红队' : '🔵 蓝队') + ' 获胜！')
-        + '（' + ctfRes.roundWins[0] + ' : ' + ctfRes.roundWins[1] + '）</div>'
-      : '';
+    let head = '';
+    if (ctfRes) {
+      head = '<div class="ctf-match-result">' + (ctfRes.winnerTeam === null ? '🤝 平局' : (ctfRes.winnerTeam === 0 ? '🔴 红队' : '🔵 蓝队') + ' 获胜！')
+        + '（' + ctfRes.roundWins[0] + ' : ' + ctfRes.roundWins[1] + '）</div>';
+    } else if (duelRes) {
+      head = '<div class="ctf-match-result">' + (duelRes.winnerTeam === null ? '🤝 平局' : (duelRes.winnerTeam === 0 ? '🔴 红队' : '🔵 蓝队') + ' 获胜！')
+        + '（基地核心战）</div>';
+    }
     gameOverStats.innerHTML = head + stats.map((s, i) => `
       <tr>
         <td>${i + 1}</td>
@@ -536,6 +1055,8 @@ import * as THREE from './three.module.min.js';
     deathOverlay.classList.add('hidden');
     started = true;
     updateHud(me);
+    updateModuleHud(me);   // 首次进入即显示模块血量
+    updateWeaponHud(me);
     if (isTouch) {
       showHint('左侧摇杆移动 · 右侧滑动转视角 · 右下开火 · 跳跃', 5000);
     } else {
@@ -566,6 +1087,12 @@ import * as THREE from './three.module.min.js';
       rp.target.set(sp.x, sp.y, sp.z);
       rp.yawT = sp.yaw;
       rp.group.visible = true;
+      // 机甲模块损伤状态（驱动瘸腿动画/核心脉冲）
+      rp.mechType = sp.mechType || rp.mechType;
+      rp.legs = (sp.mech && sp.mech.legs) || rp.legs;
+      rp.legsDestroyed = (sp.mech && sp.mech.legsDestroyed) || 0;
+      rp.chestBroken = !!(sp.mech && sp.mech.chestBroken);
+      rp.alive = sp.alive !== false;
       // 死亡或断线玩家显示为半透明幽灵（不再直接消失）
       setGhost(rp, !sp.alive || sp.connected === false);
       // 旗手高亮（全图暴露位置）
@@ -625,12 +1152,22 @@ import * as THREE from './three.module.min.js';
     updateLeaderboard(payload.players);
     // 击杀播报（用服务器时间戳过滤，内容未变不重渲染，避免闪烁）
     renderKillfeed(payload.killfeed, payload.t);
+    // 武器视觉：机炮曳光 / 激光束 / 巡飞弹轨迹 / 爆炸
+    updateTracers(payload.shots, TICK_MS / 1000);
+    updateBeams(payload.beams);
+    updateLoiterMeshes(payload.projectiles);
+    updateExplosions(payload.explosions, TICK_MS / 1000);
+    // 死斗 HUD（基地核心部署进度 / 剩余机甲）
+    if (gameMode === 'duel' && payload.duel) updateDuelHud(payload.duel);
   }
 
   function onMe(m) {
     const wasAlive = me ? me.alive : true;
     me = Object.assign(me || {}, m);
     updateHud(m);
+    updateModuleHud(m);   // 模块血量 HUD（腿/胸/核心）
+    updateWeaponHud(m);   // 武器备弹/装填/充能 HUD
+    if (!m.alive) stopSuicideHold();
     if (m.alive) {
       deathOverlay.classList.add('hidden');
     } else {
@@ -720,8 +1257,11 @@ import * as THREE from './three.module.min.js';
 
   // ---------- 模式 / 占点 UI ----------
   function applyModeUI() {
-    modeLabel.textContent = gameMode === 'zone' ? '🚩 占点模式' : '🔫 死亡竞赛';
+    modeLabel.textContent = gameMode === 'zone' ? '🚩 占点模式'
+      : gameMode === 'duel' ? '⚔ 死斗模式'
+        : gameMode === 'ctf' ? '🏳️ 战旗模式' : '🔫 死亡竞赛';
     zoneUI.classList.toggle('hidden', gameMode !== 'zone');
+    if (duelHud) duelHud.classList.toggle('hidden', gameMode !== 'duel');
   }
   function updateZoneMesh() {
     if (!zoneMesh) return;
@@ -879,7 +1419,7 @@ import * as THREE from './three.module.min.js';
     scene.add(zoneRing);
 
     renderer.domElement.addEventListener('click', () => {
-      if (isTouch || !started || ctfVoting() || document.pointerLockElement === renderer.domElement) return;
+      if (isTouch || !started || ctfVoting() || pauseOpen || document.pointerLockElement === renderer.domElement) return;
       if (performance.now() - lastLockFail < 2000) return;
       try { renderer.domElement.requestPointerLock(); } catch (e) { /* ignore */ }
     });
@@ -943,30 +1483,18 @@ import * as THREE from './three.module.min.js';
   // 远端玩家 & 弹道
   // =========================================================
   function createRemotePlayer(sp) {
-    const group = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 1.1, 0.5),
-      new THREE.MeshStandardMaterial({ color: sp.color, roughness: 0.5, metalness: 0.2, transparent: true })
-    );
-    body.position.y = 0.55;
-    const head = new THREE.Mesh(
-      new THREE.BoxGeometry(0.46, 0.4, 0.4),
-      new THREE.MeshStandardMaterial({ color: new THREE.Color(sp.color).multiplyScalar(0.65), roughness: 0.5, transparent: true })
-    );
-    head.position.y = 1.42;
-    const gun = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.1, 0.9),
-      new THREE.MeshBasicMaterial({ color: 0x7df9ff, transparent: true })
-    );
-    gun.position.set(0.2, 0.85, -0.55);
-    group.add(body, head, gun);
-
+    const group = buildMechModel(sp.mechType || 'humanoid', { color: new THREE.Color(sp.color) });
     const label = makeNameSprite(sp.name);
+    label.position.set(0, (sp.mechType === 'spider' ? 2.2 : 2.6), 0);
     group.add(label);
 
     group.position.set(sp.x, sp.y, sp.z);
     group.visible = true;
     scene.add(group);
+
+    // 按玩家武器配置挂载战斗模块
+    const mounts = (group.userData && group.userData.mounts) || [];
+    (sp.weapons || []).forEach((w, i) => { if (mounts[i]) mountWeaponVisual(mounts[i], w); });
 
     const rp = {
       id: sp.id, group, label,
@@ -974,19 +1502,30 @@ import * as THREE from './three.module.min.js';
       cur: new THREE.Vector3(sp.x, sp.y, sp.z),
       yawT: sp.yaw, yawCur: sp.yaw,
       name: sp.name, visible: true, ghost: false,
+      mechType: sp.mechType || 'humanoid',
+      legs: (sp.mech && sp.mech.legs) || [],
+      legsDestroyed: (sp.mech && sp.mech.legsDestroyed) || 0,
+      chestBroken: !!(sp.mech && sp.mech.chestBroken),
+      alive: sp.alive !== false,
+      lastX: sp.x, lastZ: sp.z,
     };
     remotePlayers.set(sp.id, rp);
     setGhost(rp, sp.alive === false);
     return rp;
   }
 
-  // 死亡玩家显示为半透明幽灵（不再直接消失）
+  // 死亡/断线玩家显示为半透明幽灵（遍历所有材质）
   function setGhost(rp, ghost) {
     rp.ghost = ghost;
-    for (let i = 0; i < 3; i++) {
-      const child = rp.group.children[i];
-      if (child && child.material) child.material.opacity = ghost ? 0.35 : 1;
-    }
+    rp.group.traverse((o) => {
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (m.transparent !== false) m.transparent = true;
+          m.opacity = ghost ? 0.35 : 1;
+        }
+      }
+    });
   }
 
   // 旗手头顶发光环（全图可辨）
@@ -1119,6 +1658,7 @@ import * as THREE from './three.module.min.js';
     let dt = (now - lastT) / 1000;
     lastT = now;
     if (dt > 0.25) dt = 0.25; // 防止卡顿/切页造成大步长
+    if (uiState === 'lobby') { renderHangarPreviews(dt); return; }
     if (!scene) return;
 
     // 平滑位置纠正：状态同步的小偏差按帧衰减应用，消除闪回/抖动
@@ -1161,8 +1701,9 @@ import * as THREE from './three.module.min.js';
       rp.group.position.lerp(rp.target, k);
       rp.yawCur = lerpAngle(rp.yawCur, rp.yawT, k);
       rp.group.rotation.y = rp.yawCur;
-      rp.label.position.set(0, 2.35, 0);
+      rp.label.position.set(0, (rp.mechType === 'spider' ? 2.2 : 2.6), 0);
       rp.label.lookAt(camera.position);
+      animateMechLegs(rp, dt); // 步行/瘸腿动画
     }
 
     const t = now * 0.001;
@@ -1201,10 +1742,18 @@ import * as THREE from './three.module.min.js';
   document.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     if (e.code === 'Space') e.preventDefault();
+    if (e.code === 'Escape' && started) {
+      e.preventDefault();
+      setPause(!pauseOpen);
+    }
+    if (e.code === 'KeyJ' && started && !pauseOpen) startSuicideHold();
   });
-  document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+  document.addEventListener('keyup', (e) => {
+    keys[e.code] = false;
+    if (e.code === 'KeyJ') stopSuicideHold();
+  });
   document.addEventListener('mousedown', (e) => {
-    if (isTouch || e.button !== 0 || !started || ctfVoting()) return;
+    if (isTouch || e.button !== 0 || !started || ctfVoting() || pauseOpen) return;
     fire = true;
     if (performance.now() - lastShotAt >= FIRE_CD) {
       lastShotAt = performance.now();
@@ -1213,7 +1762,7 @@ import * as THREE from './three.module.min.js';
   });
   document.addEventListener('mouseup', (e) => { if (!isTouch && e.button === 0) fire = false; });
   document.addEventListener('mousemove', (e) => {
-    if (isTouch || !started || ctfVoting()) return;
+    if (isTouch || !started || ctfVoting() || pauseOpen) return;
     let dx = 0, dy = 0;
     if (document.pointerLockElement === renderer.domElement) {
       // CS:GO 模式：指针锁定，原始位移增量，指哪转哪
@@ -1340,15 +1889,6 @@ import * as THREE from './three.module.min.js';
   lobbyName.addEventListener('input', () => {
     myName = (lobbyName.value || '玩家').trim().slice(0, 16);
   });
-  createRoomBtn.addEventListener('click', () => {
-    myName = (lobbyName.value || '玩家').trim().slice(0, 16);
-    socket.emit('room:create', {
-      name: myName + ' 的房间',
-      playerName: myName,
-      sessionId: getSessionId(),
-      mode: createModeSelect ? createModeSelect.value : 'ffa',
-    });
-  });
   quickJoinBtn.addEventListener('click', () => {
     // 优先进等待中的房间，其次可中途加入进行中的房间
     const open = roomList.find((r) => r.state === 'lobby' && !r.hasPassword)
@@ -1397,11 +1937,22 @@ import * as THREE from './three.module.min.js';
     });
   });
 
-  // 输入上报（死亡期间也持续上报，服务器自动忽略；复活瞬间输入立即生效）
+  // ---------- 暂停菜单按钮 ----------
+  if (pauseContinueBtn) pauseContinueBtn.addEventListener('click', () => setPause(false));
+  if (pauseSuicideBtn) pauseSuicideBtn.addEventListener('click', () => {
+    if (socket) socket.emit('suicide');
+    setPause(false);
+  });
+  if (pauseLeaveBtn) pauseLeaveBtn.addEventListener('click', () => {
+    if (socket) socket.emit('room:leave');
+    setPause(false);
+  });
+
+  // 输入上报（死亡/投票/暂停期间持续上报零输入；复活瞬间输入立即生效）
   setInterval(() => {
     if (!socket || !started || !me) return;
-    if (ctfVoting()) {
-      // 投票期间：人物静止、不可移动/开火/跳跃
+    if (ctfVoting() || pauseOpen) {
+      // 投票/暂停期间：人物静止、不可移动/开火/跳跃
       socket.emit('input', { fwd: 0, strafe: 0, jump: false, fire: false, yaw, pitch });
       return;
     }
@@ -1428,6 +1979,7 @@ import * as THREE from './three.module.min.js';
   // =========================================================
   function init() {
     applyOrientation(); // 手机端竖屏自动旋转为横屏
+    initHangar();       // 机库：模式选择 / 机甲预览 / 模块安装
     if (isTouch) {
       // 手机端：显示触控 UI 并替换操作说明
       touchUI.classList.remove('hidden');

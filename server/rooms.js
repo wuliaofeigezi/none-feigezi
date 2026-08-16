@@ -1,7 +1,7 @@
 'use strict';
 // 房间大厅系统 — RoomManager 管理多个房间，每房间一个 Game 实例（房间间广播隔离）
 const { Game } = require('./game');
-const { MAX_PLAYERS, clamp, sanitizeName } = require('../public/js/neon-shared.js');
+const { MAX_PLAYERS, clamp, sanitizeName, normalizeMech } = require('../public/js/neon-shared.js');
 
 const MAX_ROOMS = 50;               // 单进程最大房间数
 const ROOM_PALETTE = [
@@ -21,7 +21,7 @@ class Room {
     this.hostId = hostSocket.id;
     this.state = 'lobby';                       // lobby | playing
     this.settings = {
-      mode: (opts && opts.mode === 'zone' || opts && opts.mode === 'ctf') ? opts.mode : 'ffa',
+      mode: (opts && opts.mode === 'zone' || opts && opts.mode === 'ctf' || opts && opts.mode === 'duel') ? opts.mode : 'ffa',
       maxPlayers: clamp(parseInt(opts && opts.maxPlayers, 10) || MAX_PLAYERS, 2, MAX_PLAYERS),
       matchMinutes: clamp(parseInt(opts && opts.matchMinutes, 10) || 5, 1, 30),
     };
@@ -31,6 +31,14 @@ class Room {
   }
 
   // ---------- 成员管理 ----------
+  // 机库配置清洗：最多 2 台机甲 {type, weapons}
+  sanitizeMechs(raw) {
+    const list = Array.isArray(raw) ? raw.slice(0, 2) : [];
+    const out = list.map(normalizeMech);
+    if (!out.length) out.push({ type: 'humanoid', weapons: [] });
+    return out;
+  }
+
   addPlayer(socket, opts) {
     if (this.players.size >= this.settings.maxPlayers) return false;
     if (this.players.has(socket.id)) return false;
@@ -43,6 +51,7 @@ class Room {
       ready: false,
       isHost: socket.id === this.hostId,
       joinedAt: Date.now(),
+      mechs: this.sanitizeMechs(opts && opts.mechs), // 机库配置（死斗=两次生命）
     };
     this.players.set(socket.id, p);
     socket.join(this.id);
@@ -98,7 +107,7 @@ class Room {
     const p = this.players.get(socketId);
     if (!p || !p.isHost || this.state !== 'lobby') return false;
     const d = data || {};
-    if (d.mode === 'zone' || d.mode === 'ffa' || d.mode === 'ctf') this.settings.mode = d.mode;
+    if (d.mode === 'zone' || d.mode === 'ffa' || d.mode === 'ctf' || d.mode === 'duel') this.settings.mode = d.mode;
     const mp = clamp(parseInt(d.maxPlayers, 10) || this.settings.maxPlayers, 2, MAX_PLAYERS);
     if (mp >= this.players.size) this.settings.maxPlayers = mp;
     const mm = clamp(parseInt(d.matchMinutes, 10) || this.settings.matchMinutes, 1, 30);
@@ -116,7 +125,7 @@ class Room {
     if (this.players.size < 1) return false;
     this.state = 'playing';
     const seeds = [...this.players.values()].map((p) => ({
-      socketId: p.socketId, name: p.name, sessionId: p.sessionId,
+      socketId: p.socketId, name: p.name, sessionId: p.sessionId, mechs: p.mechs,
     }));
     for (const p of this.players.values()) p.ready = false;
     this.game = new Game(this.io, this.id, this.settings, {
@@ -229,6 +238,7 @@ class RoomManager {
       room.addPlayer(socket, {
         name: (data && (data.playerName || data.name)) || '玩家',
         sessionId: data && data.sessionId,
+        mechs: data && data.mechs,
       });
       socket.emit('room:joined', { room: room.toJSON() });
     });
@@ -257,13 +267,13 @@ class RoomManager {
         if (room.players.size >= room.settings.maxPlayers) {
           return socket.emit('room:error', { code: 'FULL' });
         }
-        room.addPlayer(socket, { name: d.name, sessionId: d.sessionId });
-        room.game.attachPlayer(socket.id, { name: d.name, sessionId: d.sessionId });
+        room.addPlayer(socket, { name: d.name, sessionId: d.sessionId, mechs: d.mechs });
+        room.game.attachPlayer(socket.id, { name: d.name, sessionId: d.sessionId, mechs: d.mechs });
         socket.emit('room:joined', { room: room.toJSON(), inGame: true });
         return;
       }
       if (room.players.size >= room.settings.maxPlayers) return socket.emit('room:error', { code: 'FULL' });
-      room.addPlayer(socket, { name: d.name, sessionId: d.sessionId });
+      room.addPlayer(socket, { name: d.name, sessionId: d.sessionId, mechs: d.mechs });
       socket.emit('room:joined', { room: room.toJSON() });
     });
 

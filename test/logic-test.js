@@ -1,10 +1,12 @@
 'use strict';
-// 确定性逻辑测试：物理、跳跳台、射击伤害、击杀、复活、箱顶站立、房间席位迁移
+// 确定性逻辑测试：物理、跳跳台、机甲模块伤害（机炮/激光/巡飞弹）、核心死亡、复活、
+// 腿部损毁减速（人形/蜘蛛）、血包、边界、死斗模式、断线重连恢复、房间席位迁移
 // 直接驱动 Game / Room（不依赖网络），需与当前 server 代码 API 保持同步
 const assert = require('assert');
 const { Game } = require('../server/game');
 const { MAP } = require('../server/map');
 const { RoomManager, Room } = require('../server/rooms');
+const { MODULE_LEG, MODULE_CHEST, MODULE_CORE } = require('../public/js/neon-shared.js');
 
 const sockets = new Map();
 const emitted = [];
@@ -44,7 +46,9 @@ game.timer = null;
 const pA = game.players.get('A');
 const pB = game.players.get('B');
 assert(pA && pB, '两个玩家应已创建');
-assert(pA.health === 100, '初始血量 100');
+assert(pA.mechType === 'humanoid', '默认机甲应为人形');
+assert(pA.mech.legs.length === 2 && pA.mech.chest === 250 && pA.mech.core === 100, '人形模块血量 腿100/胸250/核100');
+assert(pA.weapons.length === 4, '人形应 4 战斗模块槽');
 
 function place(p, x, z, y = 0) {
   p.pos.x = x; p.pos.z = z; p.pos.y = y;
@@ -52,6 +56,11 @@ function place(p, x, z, y = 0) {
 }
 function input(s, o) {
   s.trigger('input', Object.assign({ fwd: 0, strafe: 0, jump: false, fire: false, yaw: 0, pitch: 0 }, o));
+}
+// 给玩家换武器（跳过机库，直接改状态）
+function setWeapon(p, type) {
+  p.weapons = [type];
+  p.weaponState = [{ type, ammo: 5, reloading: false, reloadEndsAt: 0, charge: 1, fireCd: 0 }];
 }
 
 // ---- 1. 移动：yaw=0 前进应沿 -z ----
@@ -64,8 +73,8 @@ assert(pA.pos.z < 14 && pA.pos.x === 0 && pA.pos.y === 0, 'yaw=0 前进应沿 -z
 // ---- 2. 跳跃 ----
 place(pA, 0, 14);
 input(A, { jump: true });
-game.tick(); // 本 tick 施加跳跃速度
-game.tick(); // 本 tick 位置上升
+game.tick();
+game.tick();
 assert(pA.vel.y > 0 && pA.pos.y > 0, '应跳起');
 
 // ---- 3. 跳跳台 ----
@@ -83,7 +92,7 @@ console.log('撞墙后位置:', pA.pos.x.toFixed(2), pA.pos.z.toFixed(2));
 assert(pA.pos.z >= 6.44, '不应穿透中央高台（z 应停在 ~6.45）');
 
 // ---- 5. 落到箱顶并站立 ----
-place(pA, 0, 0); // 箱顶正上方（水平范围在 ±6 内）
+place(pA, 0, 0);
 pA.pos.y = 6;
 input(A, {});
 for (let i = 0; i < 6; i++) game.tick();
@@ -93,36 +102,43 @@ assert(Math.abs(pA.pos.y - 5) < 0.01 && pA.grounded, '应落在中央高台顶�
 // ---- 6. 箱顶自由行走（不卡边） ----
 input(A, { fwd: 1 });
 for (let i = 0; i < 30; i++) game.tick();
-console.log('箱顶行走后 z:', pA.pos.z.toFixed(2));
 assert(pA.pos.z < -6, '应能从箱顶走过并越过边缘（z 应 < -6）');
 
-// ---- 7. 射击命中与击杀（开阔地面对面） ----
+// ---- 7. 机炮命中模块（默认 Gau12）：平射打胸部、压低枪口打腿部 ----
 place(pA, 0, 12);
 place(pB, 0, 16);
-input(A, { fire: true, yaw: Math.PI }); // 朝 +z 瞄准 B
-input(B, {});
-let guard = 0;
-while (pB.alive && guard++ < 100) game.tick();
-console.log('B 状态:', JSON.stringify({ alive: pB.alive, health: pB.health, deaths: pB.deaths }));
-assert(!pB.alive, 'B 应被击杀');
-assert(pA.kills === 1 && pA.score === 100, 'A 应得 1 杀 100 分，实际 kills=' + pA.kills + ' score=' + pA.score);
-const kf = game.killfeed[0];
-assert(kf && kf.killer === 'Alice' && kf.victim === 'Bob', '击杀播报应记录 Alice 击杀 Bob');
+input(A, { fire: true, yaw: Math.PI, pitch: 0 }); // 朝 +z 平射
+const chest0 = pB.mech.chest;
+game.tick();
+assert(pB.mech.chest < chest0, '机炮平射应命中胸部模块');
+const legs0 = pB.mech.legs.slice();
+input(A, { fire: true, yaw: Math.PI, pitch: -0.2 }); // 压低枪口
+for (let i = 0; i < 5; i++) game.tick();
+assert(pB.mech.legs.some((h, i) => h < legs0[i]), '压低枪口应命中腿部模块');
+input(A, { fire: false });
 
-// ---- 8. 复活 ----
-pB.respawnAt = Date.now(); // 手动触发复活判定
-let guard2 = 0;
-while (!pB.alive && guard2++ < 100) game.tick();
-console.log('复活后 B 血量:', pB.health, 'alive:', pB.alive);
-assert(pB.alive && pB.health === 100, 'B 应满血复活');
+// ---- 8. 核心被击即死（直接驱动模块伤害） ----
+place(pB, 0, 16);
+const died = game.damageModule(pB, MODULE_CORE, 9999, 'A', Date.now());
+assert(died === true && !pB.alive, '核心被击应死亡');
+assert(pA.kills === 1 && pA.score === 100, '击杀应计 1 杀 100 分，实际 kills=' + pA.kills + ' score=' + pA.score);
+assert(game.killfeed[0] && game.killfeed[0].victim === 'Bob', '击杀播报应记录 Bob');
+// ffa 模式复活，模块满血
+pB.respawnAt = Date.now();
+let g1 = 0;
+while (!pB.alive && g1++ < 100) game.tick();
+assert(pB.alive, '应复活');
+assert(pB.mech.chest === pB.mech.chestMax && pB.mech.legs.every((h) => h === 100), '复活应满模块');
 
-// ---- 9. 血包 ----
-pA.health = 50;
-place(pA, MAP.pickups[1].x, MAP.pickups[1].z); // 用 ( -22, -22 )，前面未被动过
+// ---- 9. 血包：修复胸部（+25）与受损腿部 ----
+pA.mech.chest = 50;
+pA.mech.legs[0] = 60; // 受损未损毁
+place(pA, MAP.pickups[1].x, MAP.pickups[1].z);
 input(A, {});
 game.tick();
-console.log('吃血包后血量:', pA.health);
-assert(pA.health === 75, '血包应 +25');
+console.log('吃血包后血量 chest:', pA.mech.chest, 'leg0:', pA.mech.legs[0]);
+assert(pA.mech.chest === 75, '血包应给胸部 +25');
+assert(pA.mech.legs[0] === 85, '血包应修复受损腿部 +25');
 
 // ---- 10. 边界 ----
 place(pA, 200, 0);
@@ -130,15 +146,111 @@ input(A, { fwd: 1, yaw: 0 });
 for (let i = 0; i < 5; i++) game.tick();
 assert(Math.abs(pA.pos.x) <= 45 && Math.abs(pA.pos.z) <= 45, '不应越出场地边界');
 
-// ---- 11. 断线重连恢复（Game 层）：同 sessionId 恢复原玩家，并返回旧 socketId ----
-game.onLeave('A'); // 模拟 Alice 断线（connected=false）
+// ---- 11. 人形腿部损毁减速：1 腿 -50%，2 腿 -80% ----
+place(pA, 0, 0);
+input(A, { fwd: 1, yaw: Math.PI });
+game.tick();
+const fullSpd = Math.abs(pA.vel.z);
+pA.mech.legs[0] = 0;
+pA.legsDestroyed = game.countLegsDestroyed(pA);
+game.tick();
+console.log('人形 1 腿损毁 vel.z:', pA.vel.z.toFixed(2), '(期望 -4.75)');
+assert(Math.abs(Math.abs(pA.vel.z) - fullSpd * 0.5) < 0.01, '人形 1 腿损毁应减速 50%');
+pA.mech.legs[1] = 0;
+pA.legsDestroyed = game.countLegsDestroyed(pA);
+game.tick();
+console.log('人形 2 腿损毁 vel.z:', pA.vel.z.toFixed(2), '(期望 -1.90)');
+assert(Math.abs(Math.abs(pA.vel.z) - fullSpd * 0.2) < 0.01, '人形 2 腿损毁应减速 80%');
+
+// ---- 12. 镭射激光：接触施加灼烧（每秒 5 伤害持续 10 秒），停止照射后继续掉血 ----
+setWeapon(pA, 'laser');
+place(pA, 0, 12);
+place(pB, 0, 16);
+input(A, { fire: true, yaw: Math.PI, pitch: 0 });
+const chestL0 = pB.mech.chest;
+for (let i = 0; i < 5; i++) game.tick();
+input(A, { fire: false });
+assert(pB.burns.size > 0, '激光接触应施加灼烧状态');
+assert(pB.mech.chest < chestL0, '激光灼烧应造成伤害');
+const chestL1 = pB.mech.chest;
+for (let i = 0; i < 40; i++) game.tick(); // 2 秒
+assert(pB.mech.chest < chestL1, '停止照射后灼烧应继续掉血');
+assert(pB.mech.chest > 0, '灼烧不应瞬间击杀（250 胸足够）');
+
+// ---- 13. 巡飞弹：5 发齐射，弧线越地形，落地爆炸伤害（随机命中模块） ----
+setWeapon(pA, 'loiter');
+pB.burns.clear(); // 隔离上一测试的灼烧
+place(pA, 0, 12);
+place(pB, 0, 16);
+input(A, { fire: true, yaw: Math.PI, pitch: -0.5 });
+const moduleSum0 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
+game.tick(); // 先跑一 tick 触发齐射
+let g2 = 0;
+while (game.projectiles.length > 0 && g2++ < 300) game.tick();
+input(A, { fire: false });
+assert(game.projectiles.length === 0, '巡飞弹应已全部落地');
+const moduleSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
+console.log('巡飞弹后模块总血量:', moduleSum1, '<', moduleSum0);
+assert(moduleSum1 < moduleSum0, '巡飞弹爆炸应造成模块伤害');
+
+// ---- 14. 蜘蛛腿部减速表：1→5% 3→50% 5→95% 6→0 ----
+place(pB, 20, 20);
+pB.mechType = 'spider';
+pB.mech.legs = [100, 100, 100, 100, 100, 100];
+pB.legsDestroyed = 0;
+input(B, { fwd: 1, yaw: Math.PI });
+game.tick();
+const spd0 = Math.abs(pB.vel.z);
+assert(Math.abs(spd0 - 9.5) < 0.01, '蜘蛛满血移速应为 9.5');
+const spiderMuls = [0.95, 0.75, 0.5, 0.2, 0.05, 0];
+for (let i = 0; i < 6; i++) {
+  pB.mech.legs[i] = 0;
+  pB.legsDestroyed = game.countLegsDestroyed(pB);
+  game.tick();
+  const expect = spd0 * spiderMuls[i];
+  console.log('蜘蛛 ' + (i + 1) + ' 腿损毁 vel.z:', pB.vel.z.toFixed(2), '(期望 ' + (expect === 0 ? '0' : (-expect).toFixed(2)) + ')');
+  assert(Math.abs(Math.abs(pB.vel.z) - expect) < 0.01, '蜘蛛 ' + (i + 1) + ' 腿损毁减速比例错误');
+}
+assert(pB.legsDestroyed === 6, '6 腿应全部损毁');
+
+// ---- 15. 死斗模式：两次生命 + 基地核心判定 ----
+const D = fakeSocket('D');
+const E = fakeSocket('E');
+const duelGame = new Game(io, 'room_duel', { mode: 'duel', maxPlayers: 8, matchMinutes: 5 }, {});
+duelGame.start([
+  { socketId: 'D', name: 'Delta', sessionId: 'sid_d', mechs: [{ type: 'humanoid', weapons: [] }, { type: 'spider', weapons: [] }] },
+  { socketId: 'E', name: 'Echo', sessionId: 'sid_e', mechs: [{ type: 'humanoid', weapons: [] }, { type: 'spider', weapons: [] }] },
+]);
+clearInterval(duelGame.timer);
+duelGame.timer = null;
+const pD = duelGame.players.get('D');
+const pE = duelGame.players.get('E');
+assert(pD.team !== pE.team, '死斗应分属两队');
+assert(pD.lives === 2 && pD.mechs.length === 2, '死斗应携带两台机甲（两次生命）');
+// 死亡一次 → 换第二台机甲
+duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
+assert(!pD.alive && pD.mechIndex === 1 && pD.lives === 1, '死亡一次应消耗一台机甲');
+pD.respawnAt = Date.now();
+duelGame.tick();
+assert(pD.alive && pD.mechType === 'spider', '第二台机甲应为蜘蛛');
+// 再死一次 → 出局不可复活
+duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
+assert(!pD.alive && pD.mechIndex === 2 && pD.lives === 0 && pD.respawnAt === 0, '两次死亡后应出局');
+// 全灭判定：D 出局后只剩 E 队 → E 队获胜
+duelGame.tick();
+assert(duelGame.duel.winnerTeam === pE.team, '一方全灭应判另一方获胜');
+const overEvt = emitted.find(([ev, d]) => ev === 'game:over' && d && d.mode === 'duel');
+assert(overEvt && overEvt[1].duel && overEvt[1].duel.winnerTeam === pE.team, 'game:over 应携带死斗结果');
+
+// ---- 16. 断线重连恢复（Game 层）：同 sessionId 恢复原玩家，并返回旧 socketId ----
+game.onLeave('A');
 assert(!game.players.get('A').connected, '断线后 connected 应为 false');
 const oldId = game.resume(fakeSocket('A2'), 'sid_alice');
 assert(oldId === 'A', 'resume 应返回旧 socketId');
 assert(game.players.has('A2') && !game.players.has('A'), '玩家 key 应迁移到新 socketId');
 assert(game.players.get('A2').name === 'Alice' && game.players.get('A2').score === pA.score, '恢复玩家数据应保留');
 
-// ---- 12. 房间席位迁移（rooms 层，断线重连幽灵席位修复） ----
+// ---- 17. 房间席位迁移（rooms 层，断线重连幽灵席位修复） ----
 const rm = new RoomManager(io);
 const hostSock = fakeSocket('H');
 const bobSock = fakeSocket('B3');
@@ -153,9 +265,13 @@ assert(room.migrateSeat('H', 'H_new') === true, '房主席位迁移应成功');
 assert(room.hostId === 'H_new' && room.players.get('H_new').isHost, '房主身份应跟随迁移');
 assert(room.migrateSeat('H_new', 'B3_new') === false, '目标席位已占用应拒绝迁移');
 assert(room.players.size === 2, '迁移不应改变席位总数');
-// 模拟对局结束：席位 key 已迁移，onPlayerGone 能正确清空
 room.onPlayerGone('B3_new');
 assert(!room.players.has('B3_new'), '对局结束应能移除迁移后的席位（不留幽灵席位）');
+// 机库配置透传：addPlayer 应清洗并保存机甲
+const mechRoom = new Room(rm, io, fakeSocket('M'), { mode: 'duel' });
+mechRoom.addPlayer(fakeSocket('M2'), { name: 'Mech', sessionId: 'sid_m', mechs: [{ type: 'spider', weapons: ['laser', 'loiter', 'gau12'] }, { type: 'humanoid', weapons: [] }] });
+assert(mechRoom.players.get('M2').mechs.length === 2, '应保存 2 台机甲配置');
+assert(mechRoom.players.get('M2').mechs[0].type === 'spider' && mechRoom.players.get('M2').mechs[0].weapons.length === 3, '蜘蛛应 3 武器槽');
 
 console.log('\n✅ 全部逻辑测试通过');
 process.exit(0);
