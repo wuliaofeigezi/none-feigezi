@@ -142,12 +142,15 @@ class Room {
     return true;
   }
 
-  // 对局中玩家超时未重连（或对局结束仍断线）→ 从房间席位移除
+  // 对局中玩家超时未重连（或对局结束仍断线/中途离开）→ 从房间席位移除
+  // 必须处理房主移交与空房销毁，否则 hostId 指向已删除玩家 → 房间永远无法再开局
   onPlayerGone(socketId) {
-    if (this.players.has(socketId)) {
-      this.players.delete(socketId);
-      this.broadcastUpdate();
-    }
+    const p = this.players.get(socketId);
+    if (!p) return;
+    this.players.delete(socketId);
+    if (this.hostId === socketId) this.transferHost();
+    this.broadcastUpdate();
+    if (this.players.size === 0 && this.state === 'lobby') this.manager.destroyRoom(this.id);
   }
 
   endGame() {

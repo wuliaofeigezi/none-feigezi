@@ -63,8 +63,10 @@ function once(s, ev, ms) {
   console.log('开局:', welcomeA.self.name, '+', welcomeB.self.name, '| 机甲:', welcomeA.self.mechType, '| 地图盒子数:', welcomeA.map.boxes.length);
 
   // ---- 局内选择机甲（机甲改为局内选择，选定后出生） ----
-  const meAP = once(a, 'me');
-  const meBP = once(b, 'me');
+  // 注意：开局 welcome 后 attachPlayer 会先发一个 alive:false 的 me（等待选机甲），
+  // 必须等 mech:select 之后 alive=true 的那个 me
+  const meAP = new Promise((res) => a.on('me', (m) => { if (m.alive) res(m); }));
+  const meBP = new Promise((res) => b.on('me', (m) => { if (m.alive) res(m); }));
   a.emit('mech:select', { index: 0 });
   b.emit('mech:select', { index: 0 });
   const meA = await meAP;

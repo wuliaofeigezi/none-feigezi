@@ -2311,6 +2311,11 @@ import * as THREE from './three.module.min.js';
     else if (card && card.id === 'slow') m *= 0.75;     // 泥沼
     return m;
   }
+    const card = ctfState && ctfState.applied;
+    if (card && card.id === 'speed') m *= 1.5;          // 疾风
+    else if (card && card.id === 'slow') m *= 0.75;     // 泥沼
+    return m;
+  }
   function localJumpMul() {
     let m = 1;
     if (me && me.carrying) m *= 0.65;                   // 旗手降跳
