@@ -828,16 +828,27 @@ class Game {
 
   // ---------- 机甲武器系统 ----------
   updateWeapons(p, dt, now) {
-    for (const ws of p.weaponState) {
-      if (ws.type === 'gau12') this.updateGau12(p, ws, dt, now);
-      else if (ws.type === 'laser') this.updateLaser(p, ws, dt, now);
-      else if (ws.type === 'loiter') this.updateLoiter(p, ws, dt, now);
+    for (let wi = 0; wi < p.weaponState.length; wi++) {
+      const ws = p.weaponState[wi];
+      if (ws.type === 'gau12') this.updateGau12(p, ws, wi, dt, now);
+      else if (ws.type === 'laser') this.updateLaser(p, ws, wi, dt, now);
+      else if (ws.type === 'loiter') this.updateLoiter(p, ws, wi, dt, now);
     }
   }
 
-  muzzle(p) {
-    const h = MECHS[p.mechType].chestHeight * 0.8;
-    return { x: p.pos.x, y: p.pos.y + h, z: p.pos.z };
+  // 各武器槽枪口位置：按机甲 muzzlePos（本地坐标绕 yaw 旋转）→ 每条弹幕从各自枪口射出
+  muzzle(p, wi) {
+    const cfg = MECHS[p.mechType] || MECHS[DEFAULT_MECH];
+    if (cfg.muzzlePos && Number.isInteger(wi) && cfg.muzzlePos[wi]) {
+      const m = cfg.muzzlePos[wi];
+      const cos = Math.cos(p.yaw), sin = Math.sin(p.yaw);
+      return {
+        x: p.pos.x + m.x * cos + m.z * sin,
+        y: p.pos.y + m.y,
+        z: p.pos.z - m.x * sin + m.z * cos,
+      };
+    }
+    return { x: p.pos.x, y: p.pos.y + cfg.chestHeight * 0.8, z: p.pos.z };
   }
 
   // 视线射线：找第一个命中（墙壁 / 玩家模块），maxDist 米
@@ -879,7 +890,7 @@ class Game {
   }
 
   // Gau12 破坏者：720 发/分，每发 1 伤害，弹体飞行（不穿墙），索敌锁定小幅强导
-  updateGau12(p, ws, dt, now) {
+  updateGau12(p, ws, wi, dt, now) {
     const w = WEAPONS.gau12;
     if (ws.reloading) {
       if (now >= ws.reloadEndsAt) { ws.ammo = w.mag; ws.reloading = false; }
@@ -890,7 +901,7 @@ class Game {
     if (ws.fireCd <= 0) {
       const rpmMul = this.cfg.weaponRpmMul || 1;
       ws.fireCd = 60 / w.rpm / rpmMul;
-      const origin = this.muzzle(p);
+      const origin = this.muzzle(p, wi); // 各自枪口射出
       const locked = this.validLock(p);
       let dx, dy, dz;
       if (locked) {
@@ -904,8 +915,14 @@ class Game {
         const tl = Math.hypot(tx, ty, tz) || 1;
         dx = tx / tl; dy = ty / tl; dz = tz / tl;
       } else {
+        // 无瞄准点：各枪口收敛到瞄准线前方 15m 的共同目标点（多枪口弹幕合拢）
         const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
-        dx = -Math.sin(p.yaw) * cp; dy = sp; dz = -Math.cos(p.yaw) * cp;
+        const tx = p.pos.x - Math.sin(p.yaw) * cp * 15;
+        const ty = p.pos.y + 1.5 + sp * 15;
+        const tz = p.pos.z - Math.cos(p.yaw) * cp * 15;
+        const ddx = tx - origin.x, ddy = ty - origin.y, ddz = tz - origin.z;
+        const tl = Math.hypot(ddx, ddy, ddz) || 1;
+        dx = ddx / tl; dy = ddy / tl; dz = ddz / tl;
       }
       this.projectiles.push({
         kind: 'bullet', owner: p.id,
@@ -919,8 +936,8 @@ class Game {
     }
   }
 
-  // 镭射激光：持续光束，命中施加灼烧（每秒 5 伤害，持续 10 秒），30 秒满充能且可边打边充；索敌后光束指向锁定目标
-  updateLaser(p, ws, dt, now) {
+  // 灼光镭射激光：持续光束，命中施加灼烧（每秒 15 伤害，持续 10 秒），30 秒满充能且可边打边充；索敌后光束指向锁定目标
+  updateLaser(p, ws, wi, dt, now) {
     const w = WEAPONS.laser;
     // 始终充能（可边打边装填）
     ws.charge = Math.min(1, (ws.charge || 1) + dt / (w.chargeFullMs / 1000));
@@ -928,7 +945,7 @@ class Game {
     ws.charge = Math.max(0, ws.charge - dt / (w.maxBeamMs / 1000));
     if (ws.charge <= 0.01) { ws.beam = false; return; }
     ws.beam = true;
-    const origin = this.muzzle(p);
+    const origin = this.muzzle(p, wi); // 各自枪口射出光束
     const locked = this.validLock(p);
     let hit = null;
     if (locked) {
@@ -945,8 +962,14 @@ class Game {
         const tl = Math.hypot(tx, ty, tz) || 1;
         dir = { x: tx / tl, y: ty / tl, z: tz / tl };
       } else {
+        // 无瞄准点：各枪口光束收敛到瞄准线前方 15m 的共同目标点
         const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
-        dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+        const tx = p.pos.x - Math.sin(p.yaw) * cp * 15;
+        const ty = p.pos.y + 1.5 + sp * 15;
+        const tz = p.pos.z - Math.cos(p.yaw) * cp * 15;
+        const ddx = tx - origin.x, ddy = ty - origin.y, ddz = tz - origin.z;
+        const tl = Math.hypot(ddx, ddy, ddz) || 1;
+        dir = { x: ddx / tl, y: ddy / tl, z: ddz / tl };
       }
       hit = this.rayHit(origin, dir, 60, p);
     }
@@ -983,15 +1006,15 @@ class Game {
     }
   }
 
-  // 巡飞弹：弹夹 5 发一次性全部打出，20 秒装填，有散布，弧线越地形
-  updateLoiter(p, ws, dt, now) {
+  // 蜂群巡飞弹：弹夹 5 发一次性全部打出，20 秒装填，有散布，弧线越地形
+  updateLoiter(p, ws, wi, dt, now) {
     const w = WEAPONS.loiter;
     if (ws.reloading) {
       if (now >= ws.reloadEndsAt) { ws.ammo = w.mag; ws.reloading = false; }
       return;
     }
     if (!p.input.fire || ws.ammo < w.volley) return;
-    const origin = this.muzzle(p);
+    const origin = this.muzzle(p, wi); // 各自枪口射出
     const locked = this.validLock(p);
     const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
     const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };

@@ -48,23 +48,35 @@
   const CORE_HIT_CHANCE = 0.5;
 
   const MECHS = {
-    // 人形战斗机器人：双腿 + 胸部 + 藏于胸部的核心，肩部 4 战斗模块槽（上下分布）
+    // 人形「泰坦」：双腿 + 胸部 + 藏于胸部的核心，肩部 4 战斗模块槽（上下分布）
     humanoid: {
-      name: '人形战斗机器人',
+      name: '泰坦',
       legs: 2, legHp: 100, chestHp: 250, coreHp: 100,
       mounts: 4,
       moveMul: 0.25, // 重型机甲：移速减缓 75%
+      // 各武器槽枪口位置（本地坐标，绕 yaw 旋转后为世界位置）
+      muzzlePos: [
+        { x: -0.72, y: 1.68, z: 0.14 }, // 左上（落于肩膀上）
+        { x: 0.72, y: 1.68, z: 0.14 },  // 右上
+        { x: -0.9, y: 1.38, z: 0 },     // 左下（落于肩膀侧）
+        { x: 0.9, y: 1.38, z: 0 },      // 右下
+      ],
       // 损毁 0/1/2 条腿的移速倍率：-0% / -50% / -80%
       legSpeedMul: [1, 0.5, 0.2],
       // 模块命中高度分段（腿部 / 胸部），用于弹道命中判定
       legHeight: 0.95, chestHeight: 1.75,
     },
-    // 蜘蛛机器人：六条腿(各50) + 胸部(100) + 核心，胸部两侧 + 顶部共 3 战斗模块槽
+    // 蜘蛛「猎蛛」：六条腿(各50) + 胸部(100) + 核心，胸部两侧 + 顶部共 3 战斗模块槽
     spider: {
-      name: '蜘蛛机器人',
+      name: '猎蛛',
       legs: 6, legHp: 50, chestHp: 100, coreHp: 100,
       mounts: 3,
       moveMul: 0.5, // 移速减缓 50%
+      muzzlePos: [
+        { x: -0.95, y: 1.02, z: 0.1 }, // 左侧
+        { x: 0.95, y: 1.02, z: 0.1 },  // 右侧
+        { x: 0, y: 1.5, z: 0 },        // 顶部
+      ],
       // 损毁 0..6 条腿：-0%/-5%/-25%/-50%/-80%/-95%/-100%（失去行动能力）
       legSpeedMul: [1, 0.95, 0.75, 0.5, 0.2, 0.05, 0],
       legHeight: 0.7, chestHeight: 1.3,
@@ -80,16 +92,16 @@
       rpm: 720, mag: 480, reloadMs: 15000,
       dmg: 1, canReloadWhileFire: false,
     },
-    // 镭射激光：击中后 10 秒内每秒 15 伤害（×3），满装填 30s，可边打边装填
+    // “灼光”镭射激光：击中后 10 秒内每秒 15 伤害（×3），满装填 30s，可边打边装填
     laser: {
-      name: '镭射激光', type: 'laser',
+      name: '灼光', type: 'laser',
       dmgPerSec: 15, burnMs: 10000,
       chargeFullMs: 30000, maxBeamMs: 10000,
       canReloadWhileFire: true,
     },
-    // 巡飞弹：弹夹 5 发一次性全部打出，装填 20s，追踪锁定目标，每发命中模块 20 伤害
+    // “蜂群”巡飞弹：弹夹 5 发一次性全部打出，装填 20s，追踪锁定目标，每发命中模块 20 伤害
     loiter: {
-      name: '巡飞弹', type: 'loiter',
+      name: '蜂群', type: 'loiter',
       mag: 5, volley: 5, reloadMs: 20000, dmg: 20,
       spread: 0.07, speed: 26, arcHeight: 16, blastRadius: 3.2,
     },

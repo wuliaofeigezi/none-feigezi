@@ -5,7 +5,7 @@ import * as THREE from './three.module.min.js';
   'use strict';
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260819 · 相机 camHgt = 2.5 平视 · 机甲中下方约1/5 · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260820 · 泰坦/猎蛛 · 多枪口弹幕 · 如加载旧版请强制刷新/清除缓存');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -425,7 +425,10 @@ import * as THREE from './three.module.min.js';
 
   // ---------- 机库（原大厅） ----------
   const WEAPON_ORDER = ['gau12', 'laser', 'loiter'];
-  const WEAPON_LABEL = { gau12: ['Gau12', '机炮'], laser: ['镭射', '激光'], loiter: ['巡飞', '飞弹'] };
+  const WEAPON_LABEL = { gau12: ['Gau12', '机炮'], laser: ['灼光', '镭射'], loiter: ['蜂群', '巡飞'] };
+  function mechDisplayName(type) {
+    return type === 'spider' ? '🕷 猎蛛' : '🤖 泰坦';
+  }
 
   function initHangar() {
     if (modeBtns) {
@@ -997,7 +1000,7 @@ import * as THREE from './three.module.min.js';
     el.classList.remove('hidden');
     btns.innerHTML = list.map((c) =>
       '<button class="ms-btn' + (c.index === msSelected ? ' selected' : '') + '" data-i="' + c.index + '">' +
-      (c.type === 'spider' ? '🕷 蜘蛛机器人' : '🤖 人形战斗机器人') + '</button>').join('');
+      mechDisplayName(c.type) + '</button>').join('');
     btns.querySelectorAll('.ms-btn').forEach((b) => {
       b.addEventListener('click', () => {
         msSelected = parseInt(b.dataset.i, 10);
@@ -2489,15 +2492,16 @@ import * as THREE from './three.module.min.js';
     clearInterval(msCountdownTimer);
   });
 
-  // 准星瞄准点：相机视线（屏幕中心）延伸 50m 的世界坐标，随输入上报给服务器
+  // 准星瞄准点：相机视线（屏幕中心）延伸 20m 的世界坐标，随输入上报给服务器
+  // 20m 使多枪口弹幕更早合拢命中；方向与更远距离一致（都在准星射线上）
   function computeAimPoint() {
     if (!camera) {
       const cp = Math.cos(pitch), sp = Math.sin(pitch);
-      return { x: myPos.x - Math.sin(yaw) * cp * 50, y: myPos.y + 1.6 + sp * 50, z: myPos.z - Math.cos(yaw) * cp * 50 };
+      return { x: myPos.x - Math.sin(yaw) * cp * 20, y: myPos.y + 1.6 + sp * 20, z: myPos.z - Math.cos(yaw) * cp * 20 };
     }
     const v = new THREE.Vector3();
     camera.getWorldDirection(v);
-    return { x: camera.position.x + v.x * 50, y: camera.position.y + v.y * 50, z: camera.position.z + v.z * 50 };
+    return { x: camera.position.x + v.x * 20, y: camera.position.y + v.y * 20, z: camera.position.z + v.z * 20 };
   }
 
   // 输入上报（死亡/投票/暂停/选择机甲期间持续上报零输入；复活瞬间输入立即生效）
