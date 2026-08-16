@@ -131,6 +131,12 @@
       mag: 5, volley: 5, reloadMs: 15000, dmg: 12,
       spread: 0.07, speed: 26, arcHeight: 16, blastRadius: 2.4,
     },
+    // 量子防护罩（守护者头顶固定模块）：不可更换；F 键点击切换升起/收回
+    // 升起期间阻挡物理伤害、无法移动；耐久耗尽自动破盾；随时间缓慢恢复
+    shield: {
+      name: '量子防护罩', type: 'shield',
+      shieldMax: 300, shieldRegen: 12, shieldRegenDelayMs: 2000,
+    },
   };
   const DEFAULT_WEAPON = 'gau12';
 
@@ -142,12 +148,14 @@
   }
 
   // 规范化武器槽：长度对齐 mounts，非法值回退默认武器
-  function normalizeWeapons(raw, mounts) {
+  // 守护者（guardian）头顶（最后一个槽）固定为量子防护罩，不可更换
+  function normalizeWeapons(raw, mounts, mechType) {
     const list = Array.isArray(raw) ? raw : [];
     const out = [];
     for (let i = 0; i < mounts; i++) {
+      if (mechType === 'guardian' && i === mounts - 1) { out.push('shield'); continue; }
       const w = list[i];
-      out.push(WEAPONS[w] ? w : DEFAULT_WEAPON);
+      out.push(WEAPONS[w] && w !== 'shield' ? w : DEFAULT_WEAPON);
     }
     return out;
   }
@@ -156,7 +164,7 @@
   function normalizeMech(raw) {
     const r = raw && typeof raw === 'object' ? raw : {};
     const type = MECHS[r.type] ? r.type : DEFAULT_MECH;
-    return { type, weapons: normalizeWeapons(r.weapons, MECHS[type].mounts) };
+    return { type, weapons: normalizeWeapons(r.weapons, MECHS[type].mounts, type) };
   }
 
   // ---------- 工具函数 ----------

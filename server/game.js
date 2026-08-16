@@ -246,6 +246,7 @@ class Game {
       vote: (d) => this.onVote(p.id, d),
       ping: (cb) => { if (typeof cb === 'function') cb(Date.now()); },
       suicide: () => this.onSuicide(p.id),
+      shieldToggle: () => this.onShieldToggle(p.id),
       lock: (d) => this.onLock(p.id, d),
       mechSelect: (d) => this.onMechSelect(p.id, d),
       mechConfig: (d) => this.onMechConfig(p.id, d),
@@ -256,6 +257,7 @@ class Game {
     socket.on('vote', h.vote);
     socket.on('ping', h.ping);
     socket.on('suicide', h.suicide);
+    socket.on('shield:toggle', h.shieldToggle);
     socket.on('lock', h.lock);
     socket.on('mech:select', h.mechSelect);
     socket.on('mech:config', h.mechConfig);
@@ -322,7 +324,7 @@ class Game {
   applyMech(p, mechCfg) {
     const cfg = MECHS[mechCfg.type] || MECHS[DEFAULT_MECH];
     p.mechType = mechCfg.type;
-    p.weapons = normalizeWeapons(mechCfg.weapons, cfg.mounts);
+    p.weapons = normalizeWeapons(mechCfg.weapons, cfg.mounts, mechCfg.type);
     p.mech = {
       legs: Array.from({ length: cfg.legs }, () => cfg.legHp),
       chest: Math.round(cfg.chestHp * this.cfg.chestMul),
@@ -417,8 +419,6 @@ class Game {
       p.input.fwd = clamp(Number(data.fwd) || 0, -1, 1);
       p.input.strafe = clamp(Number(data.strafe) || 0, -1, 1);
       p.input.jump = !!data.jump;
-      // 守护者量子罩：按 Q 升起/收回（收起时机甲可移动）
-      p.input.shield = !!data.shield && MECHS[p.mechType] && !!MECHS[p.mechType].shieldMax;
       // 夺旗者不能开枪
       p.input.fire = !!data.fire && !this.isFlagCarrier(p.id);
       if (Number.isFinite(data.yaw)) p.yaw = data.yaw;
@@ -435,6 +435,16 @@ class Game {
     const p = this.players.get(playerId);
     if (!this.active || !p || !p.connected || !p.alive) return;
     this.killPlayer(p, null, Date.now(), 'suicide');
+  }
+
+  // 守护者量子罩：F 键点击切换升起/收回（耐久耗尽自动破盾，恢复后可再次升起）
+  onShieldToggle(playerId) {
+    const p = this.players.get(playerId);
+    if (!this.active || !p || !p.connected || !p.alive) return;
+    if (!p.shield || !p.shield.max) return;
+    if (p.shield.hp <= 0) { p.shield.active = false; return; } // 耐久耗尽无法升起
+    p.shield.active = !p.shield.active;
+    this.sendMe(p);
   }
 
   // ---------- 武器索敌（锁定） ----------
@@ -504,7 +514,7 @@ class Game {
     const idx = parseInt(data.index, 10);
     if (!Number.isInteger(idx) || idx < 0 || idx >= p.mechs.length) return;
     const cfg = MECHS[p.mechs[idx].type];
-    p.mechs[idx].weapons = normalizeWeapons(data.weapons, cfg.mounts);
+    p.mechs[idx].weapons = normalizeWeapons(data.weapons, cfg.mounts, p.mechs[idx].type);
     this.sendMe(p);
   }
 
@@ -818,7 +828,7 @@ class Game {
       };
       const p = this.createPlayer(id, seed, this.players.size);
       p.isBot = true;
-      p.botBrain = { retargetAt: 0, wanderAt: 0, wanderYaw: Math.random() * Math.PI * 2 };
+      p.botBrain = { retargetAt: 0, wanderAt: 0, wanderYaw: Math.random() * Math.PI * 2, nextThinkAt: 0, lastLock: null };
       this.players.set(id, p);
       p.mechIndex = 0;
       this.respawn(p); // 直接出生
@@ -827,10 +837,15 @@ class Game {
   }
 
   // Bot AI：每 tick 驱动输入（追击最近敌人、开火、简单躲避/游走）
+  // 性能：每 2 tick 决策一次（20Hz→10Hz），避免服务器每 tick 全玩家扫描与 raycast
   updateBot(p, dt, now) {
     if (!p.isBot || !p.alive) return;
     const brain = p.botBrain;
-    // 找最近敌方
+    // 决策节流：同一 bot 每 2 tick 决策一次（tick 计数，与真实时间解耦）
+    if (p.tickCount === undefined) p.tickCount = 0;
+    p.tickCount++;
+    if (p.tickCount % 2 !== 0) return;
+    // 找最近敌方（每 2 tick 一次）
     let best = null, bd = Infinity;
     for (const q of this.players.values()) {
       if (q === p || !q.alive || !q.connected) continue;
@@ -873,8 +888,11 @@ class Game {
     input.fire = dist < 45;
     input.jump = p.mechType === 'humanoid' && dist < 6 && Math.random() < 0.02; // 偶尔跳
     input.shield = false;
-    // 索敌锁定 + 瞄准点指向目标
-    this.onLock(p.id, { targetId: best.id });
+    // 索敌锁定 + 瞄准点指向目标（节流后调用，避免每 tick raycast）
+    if (brain.lastLock !== best.id) {
+      this.onLock(p.id, { targetId: best.id });
+      brain.lastLock = best.id;
+    }
     p.aim = {
       x: best.pos.x, y: best.pos.y + 0.9, z: best.pos.z,
     };
@@ -1166,9 +1184,7 @@ class Game {
     if (now - s.lastHitAt >= (cfg.shieldRegenDelayMs || 0)) {
       s.hp = Math.min(s.max, s.hp + (cfg.shieldRegen || 0) * dt);
     }
-    // 升起请求：耐久 > 0 才可升起；耐久耗尽自动破盾
-    if (p.input.shield && s.hp > 0) s.active = true;
-    else s.active = false;
+    // 升起状态由 F 键点击切换（onShieldToggle）；耐久耗尽自动破盾
     if (s.active && s.hp <= 0) s.active = false;
   }
 
@@ -1662,6 +1678,18 @@ class Game {
   weaponStateToJSON(p, now) {
     return p.weaponState.map((ws) => {
       const def = WEAPONS[ws.type];
+      if (ws.type === 'shield') {
+        // 量子防护罩：显示耐久百分比（作为 reloadPct 语义复用）
+        const s = p.shield || { hp: 0, max: 1 };
+        return {
+          type: 'shield',
+          ammo: null,
+          reloading: !!s.active,
+          reloadLeft: Math.ceil(s.hp),
+          reloadPct: clamp(s.hp / (s.max || 1), 0, 1),
+          charge: s.active ? 1 : 0,
+        };
+      }
       return {
         type: ws.type,
         ammo: (ws.ammo !== undefined) ? ws.ammo : null,

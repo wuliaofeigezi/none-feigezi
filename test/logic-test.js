@@ -365,10 +365,16 @@ shieldGame.onMechSelect('H', { index: 0 });
 const pG = shieldGame.players.get('G');
 const pH = shieldGame.players.get('H');
 assert(pG.mechType === 'guardian' && pG.shield && pG.shield.max === 300, '守护者应带量子罩（上限300）');
-// 升起护罩
-pG.input.shield = true;
-shieldGame.updateShield(pG, 0.05, Date.now());
-assert(pG.shield.active === true, '耐久>0 时按 Q 应升起护罩');
+// 守护者头顶槽固定为防护罩模块
+assert(pG.weapons[pG.weapons.length - 1] === 'shield', '守护者头顶槽应固定为量子防护罩');
+// F 点击切换升起护罩
+shieldGame.onShieldToggle('G');
+assert(pG.shield.active === true, '耐久>0 时按 F 应升起护罩');
+// 再次点击收回
+shieldGame.onShieldToggle('G');
+assert(pG.shield.active === false, '再次按 F 应收回护罩');
+shieldGame.onShieldToggle('G'); // 再升起用于后续测试
+assert(pG.shield.active === true, '第三次按 F 应再升起');
 // 升起时物理伤害被吸收，模块不掉血
 const chestBefore = pG.mech.chest;
 shieldGame.damageModule(pG, MODULE_CHEST, 50, 'H', Date.now());
@@ -377,23 +383,23 @@ assert(pG.shield.hp < 300, '护罩应消耗耐久');
 // 升起时无法移动（物理层锁速）
 place(pG, 0, 14);
 pG.input.fwd = 1;
-pG.input.shield = true;
 shieldGame.physics(pG, 0.05);
 assert(pG.vel.x === 0 && pG.vel.z === 0, '升起护罩时应无法移动');
 // 激光（能量）绕过护罩
 const chestBefore2 = pG.mech.chest;
 shieldGame.damageModule(pG, MODULE_CHEST, 10, 'H', Date.now(), null, true);
 assert(pG.mech.chest === chestBefore2 - 10, '激光为能量伤害应绕过量子罩');
-// 收起护罩后可移动
-pG.input.shield = false;
-shieldGame.updateShield(pG, 0.05, Date.now());
-assert(pG.shield.active === false, '松开 Q 应收回护罩');
+// 点击收回护罩后可移动
+shieldGame.onShieldToggle('G');
+assert(pG.shield.active === false, '点击应收回护罩');
 // 耐久耗尽自动破盾：打空耐久
-pG.input.shield = true;
-shieldGame.updateShield(pG, 0.05, Date.now());
+shieldGame.onShieldToggle('G');
 pG.shield.hp = 5;
 shieldGame.damageModule(pG, MODULE_CHEST, 50, 'H', Date.now());
 assert(pG.shield.active === false, '耐久耗尽应自动破盾');
+// 耐久耗尽时无法再次升起
+shieldGame.onShieldToggle('G');
+assert(pG.shield.active === false, '耐久耗尽时按 F 不应升起');
 // 耐久恢复：受击延迟后匀速回满
 pG.shield.lastHitAt = Date.now() - 5000;
 pG.shield.hp = 100;

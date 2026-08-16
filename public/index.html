@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260905"/>
+<link rel="stylesheet" href="css/style.css?v=20260906"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -115,6 +115,8 @@
   .weapon-slot{flex:1;min-width:70px;padding:5px 6px;border-radius:6px;border:1px solid #33408f;background:#101432;color:#cfe0ff;font-size:11px;cursor:pointer;text-align:center;transition:.15s;}
   .weapon-slot:hover{border-color:#5a7bff;background:#18204e;}
   .weapon-slot.sel{border-color:#7df9ff;background:#12344f;box-shadow:0 0 6px #2fd6ff66;}
+  .weapon-slot.fixed,.ms-weapon.fixed{border-color:#2affa0;background:#0d2a22;cursor:default;}
+  .weapon-slot.fixed .ws-name,.ms-weapon.fixed .ws-name{color:#7df9a8;}
   .weapon-slot:hover{border-color:#4f6bff;background:#141a42;}
   .weapon-slot .ws-name{display:block;font-weight:700;font-size:11px;}
   .weapon-slot .ws-type{display:block;font-size:9px;color:#8fa3d8;}
@@ -412,7 +414,7 @@
     </div>
     <div id="roomList" class="room-list"></div>
     <div class="help" id="helpText">
-      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃 · <b>Q 守护者量子罩</b>（升起挡物理伤害，但无法移动）· <b>M 大地图</b><br/>
+      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃 · <b>F 守护者量子罩</b>（点击切换，升起挡物理伤害但无法移动）· <b>M 大地图</b><br/>
       <b>ESC</b> 打开菜单（可自杀）· <b>长按 J 3 秒</b> 也可自杀<br/>
       💡 腿部损毁会减速（人形 1 腿 -50%、2 腿 -80%；蜘蛛按 5%/25%/50%/80%/95% 递增、6 腿瘫痪），胸部耗尽后核心可能被击穿！
       <br/>🤖 房主可在房间设置里加入人机；对局中真人加入会替代人机席位。死斗每小局一条命，死亡即观战，下回合复活。
@@ -488,8 +490,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260905"></script>
-<script src="js/neon-shared.js?v=20260905"></script>
-<script type="module" src="js/main.js?v=20260905"></script>
+<script src="js/socket.io.min.js?v=20260906"></script>
+<script src="js/neon-shared.js?v=20260906"></script>
+<script type="module" src="js/main.js?v=20260906"></script>
 </body>
 </html>

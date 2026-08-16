@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260905 · 死斗小局一条命死亡观战+其他模式复活10秒+人机系统(房主可选/真人替代) · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260906 · 守护者头顶固定防护罩模块+F点击切换；修复小地图镜像/移动抽搐(步频)/服务器卡顿(人机决策节流) · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -311,7 +311,7 @@ import * as THREE from './three.module.min.js';
   let mechConfigs = [
     { type: 'humanoid', weapons: ['gau12', 'gau12', 'gau12', 'gau12'] },
     { type: 'spider', weapons: ['gau12', 'gau12', 'gau12'] },
-    { type: 'guardian', weapons: ['gau12', 'gau12', 'gau12'] },
+    { type: 'guardian', weapons: ['gau12', 'gau12', 'shield'] },
   ];
   // ===== 武器视觉状态 =====
   let tracerPool = [];           // 机炮曳光
@@ -609,10 +609,10 @@ import * as THREE from './three.module.min.js';
 
   // ---------- 机库（原大厅） ----------
   const WEAPON_ORDER = ['gau12', 'laser', 'loiter'];
-  const WEAPON_LABEL = { gau12: ['Gau12', '机炮'], laser: ['灼光', '镭射'], loiter: ['蜂群', '巡飞'] };
+  const WEAPON_LABEL = { gau12: ['Gau12', '机炮'], laser: ['灼光', '镭射'], loiter: ['蜂群', '巡飞'], shield: ['量子罩', '防护'] };
   function mechDisplayName(type) {
     if (type === 'spider') return '🕷 猎蛛';
-    if (type === 'guardian') return '🛡 守护者 [Q]';
+    if (type === 'guardian') return '🛡 守护者 [F]';
     return '🤖 泰坦 ⬆跳跃';
   }
 
@@ -653,16 +653,22 @@ import * as THREE from './three.module.min.js';
     const el = slotEls[slotIdx];
     if (!el) return;
     const cfg = mechConfigs[slotIdx];
+    const isGuardian = cfg.type === 'guardian';
     // 点击槽位时展示该武器详情；默认展示第 1 个槽
     if (!cfg.userData) cfg.userData = {};
     if (cfg.userData.detailSlot === undefined) cfg.userData.detailSlot = 0;
-    el.innerHTML = cfg.weapons.map((w, i) =>
-      '<button class="weapon-slot w-' + w + (i === cfg.userData.detailSlot ? ' sel' : '') + '" data-i="' + i + '" title="点击切换武器">' +
-      '<span class="ws-name">' + WEAPON_LABEL[w][0] + '</span>' +
-      '<span class="ws-type">' + WEAPON_LABEL[w][1] + '</span></button>').join('');
+    // 守护者：最后一个槽（头顶）固定为量子防护罩，不可更换
+    el.innerHTML = cfg.weapons.map((w, i) => {
+      const fixed = isGuardian && i === cfg.weapons.length - 1 && w === 'shield';
+      return '<button class="weapon-slot w-' + w + (i === cfg.userData.detailSlot ? ' sel' : '') + (fixed ? ' fixed' : '') + '" data-i="' + i + '" title="' + (fixed ? '固定模块（F 切换防护罩）' : '点击切换武器') + '">' +
+        '<span class="ws-name">' + WEAPON_LABEL[w][0] + '</span>' +
+        '<span class="ws-type">' + WEAPON_LABEL[w][1] + '</span></button>';
+    }).join('');
     el.querySelectorAll('.weapon-slot').forEach((btn) => {
       btn.addEventListener('click', () => {
         const i = parseInt(btn.dataset.i, 10);
+        const w = cfg.weapons[i];
+        if (w === 'shield') return; // 固定模块不可切换
         cfg.userData.detailSlot = i;
         cfg.weapons[i] = WEAPON_ORDER[(WEAPON_ORDER.indexOf(cfg.weapons[i]) + 1) % WEAPON_ORDER.length];
         renderWeaponSlots(slotIdx);
@@ -670,7 +676,7 @@ import * as THREE from './three.module.min.js';
           // 刷新预览上的武器挂载
           const mounts = hangarModels[slotIdx].userData.mounts;
           mounts.forEach((m) => { for (let c = m.children.length - 1; c >= 0; c--) m.remove(m.children[c]); });
-          cfg.weapons.forEach((w, i) => { if (mounts[i]) mountWeaponVisual(mounts[i], w); });
+          cfg.weapons.forEach((w2, i2) => { if (mounts[i2]) mountWeaponVisual(mounts[i2], w2); });
         }
       });
     });
@@ -700,6 +706,11 @@ import * as THREE from './three.module.min.js';
       rows.push('单发伤害 ' + W.dmg);
       rows.push('爆炸半径 ' + W.blastRadius + ' 米');
       rows.push('装填 ' + (W.reloadMs / 1000).toFixed(1) + ' 秒');
+    } else if (w === 'shield') {
+      rows.push('耐久 ' + W.shieldMax);
+      rows.push('恢复 ' + W.shieldRegen + '/秒');
+      rows.push('F 键点击切换');
+      rows.push('升起时无法移动');
     }
     return rows.join(' · ');
   }
@@ -1239,6 +1250,21 @@ import * as THREE from './three.module.min.js';
       const body = box(0.2, 0.14, 0.3, new THREE.MeshStandardMaterial({ color: 0x5a1030 }));
       body.position.z = -0.1;
       mount.add(body, emitter, ring1, ring2);
+    } else if (type === 'shield') {
+      // 量子防护罩模块：棱形发生器 + 能量环（固定于守护者头顶）
+      const gen = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.13, 0),
+        new THREE.MeshStandardMaterial({ color: 0x7df9a8, emissive: 0x2affa0, emissiveIntensity: 1.2 })
+      );
+      gen.position.z = -0.1;
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.16, 0.02, 6, 16),
+        new THREE.MeshStandardMaterial({ color: 0x7df9a8, emissive: 0x2affa0, emissiveIntensity: 0.6 })
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.z = -0.1;
+      const base = box(0.3, 0.08, 0.24, new THREE.MeshStandardMaterial({ color: 0x2a4a3a, metalness: 0.5 }));
+      mount.add(base, gen, ring);
     } else {
       // 巡飞弹：5 管发射巢
       const launcher = box(0.34, 0.2, 0.4, new THREE.MeshStandardMaterial({ color: 0x4a3a10, roughness: 0.5 }));
@@ -1258,10 +1284,10 @@ import * as THREE from './three.module.min.js';
     const ud = rp.group.userData || {};
     const legs = ud.legs || [];
     if (!legs.length) return;
-    // 移动速度 → 步频
+    // 移动速度 → 步频（满速 12 m/s 时约 12.6 rad/s ≈ 2 步/秒的自然步速）
     const spd = rp.target ? Math.hypot(rp.target.x - rp.lastX, rp.target.z - rp.lastZ) / Math.max(dt, 0.001) : 0;
     rp.lastX = rp.target.x; rp.lastZ = rp.target.z;
-    ud.gait += Math.min(spd, 12) * dt * 3.2;
+    ud.gait += Math.min(spd, 12) * dt * 1.05;
     const alive = rp.alive !== false;
     // 武器后坐力：开火时挂载点小幅后坐并回弹（rp.recoil 或 group.userData.recoil 驱动）
     if (rp.recoil === undefined && ud.recoil !== undefined) rp.recoil = ud.recoil;
@@ -1275,11 +1301,12 @@ import * as THREE from './three.module.min.js';
       if (m.userData.baseZ === undefined) m.userData.baseZ = m.position.z;
       m.position.z = m.userData.baseZ + recoilZ;
     }
-    // 待机/移动起伏（呼吸感 + 步伐起伏）
-    const bob = alive ? Math.sin(ud.gait * 2) * Math.min(spd, 12) * 0.02 : 0;
+    // 待机/移动起伏（呼吸感 + 步伐起伏；步频按自然步速 2步/秒 缩放，避免高频抖动）
+    const stepPhase = ud.gait; // 满速时约 12.6 rad/s ≈ 2 步/秒
+    const bob = alive ? Math.sin(stepPhase) * Math.min(spd, 12) * 0.012 : 0;
     if (ud.chest) {
       if (ud.chest.userData.baseY === undefined) ud.chest.userData.baseY = ud.chest.position.y;
-      const idle = alive ? Math.sin(performance.now() * 0.003) * 0.012 : 0;
+      const idle = alive ? Math.sin(performance.now() * 0.003) * 0.01 : 0;
       ud.chest.position.y = ud.chest.userData.baseY + bob + idle;
     }
     // 量子防护罩：升起时显示半透明能量穹顶（守护者专属）
@@ -1558,14 +1585,18 @@ import * as THREE from './three.module.min.js';
     if (!el) return;
     const choice = mechChoicesCache.find((c) => c.index === msSelected);
     if (!choice) { el.innerHTML = ''; return; }
+    const isGuardian = choice.type === 'guardian';
     const weapons = msWeaponEdits[choice.index] || choice.weapons;
-    el.innerHTML = weapons.map((w, i) =>
-      '<button class="ms-weapon w-' + w + '" data-i="' + i + '">' +
-      '<span class="ws-name">' + WEAPON_LABEL[w][0] + '</span>' +
-      '<span class="ws-type">' + WEAPON_LABEL[w][1] + '</span></button>').join('');
+    el.innerHTML = weapons.map((w, i) => {
+      const fixed = isGuardian && i === weapons.length - 1 && w === 'shield';
+      return '<button class="ms-weapon w-' + w + (fixed ? ' fixed' : '') + '" data-i="' + i + '" title="' + (fixed ? '固定模块' : '点击切换武器') + '">' +
+        '<span class="ws-name">' + WEAPON_LABEL[w][0] + '</span>' +
+        '<span class="ws-type">' + WEAPON_LABEL[w][1] + '</span></button>';
+    }).join('');
     el.querySelectorAll('.ms-weapon').forEach((btn) => {
       btn.addEventListener('click', () => {
         const i = parseInt(btn.dataset.i, 10);
+        if (weapons[i] === 'shield') return; // 固定模块不可切换
         const list = (msWeaponEdits[choice.index] || choice.weapons.slice());
         list[i] = WEAPON_ORDER[(WEAPON_ORDER.indexOf(list[i]) + 1) % WEAPON_ORDER.length];
         msWeaponEdits[choice.index] = list;
@@ -1845,13 +1876,13 @@ import * as THREE from './three.module.min.js';
       ctx.arc(x, y, isMe ? 5 : 3.5, 0, Math.PI * 2);
       ctx.fill();
       if (isMe) {
-        // 自己：朝向指示线
+        // 自己：朝向指示线（世界 yaw=0 面向 -z，画布 z 轴反转 → y 取负，避免镜像）
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
         const len = 10;
         ctx.beginPath();
         ctx.moveTo(x, y);
-        ctx.lineTo(x - Math.sin(selfYaw) * len, y + Math.cos(selfYaw) * len);
+        ctx.lineTo(x - Math.sin(selfYaw) * len, y - Math.cos(selfYaw) * len);
         ctx.stroke();
       }
     }
@@ -1893,9 +1924,13 @@ import * as THREE from './three.module.min.js';
   function updateWeaponHud(m) {
     if (!weaponHud || !m || !m.weapons) return;
     const rows = m.weapons.map((w) => {
-      const def = NS.WEAPONS[w.type];
+      const def = NS.WEAPONS[w.type] || { name: w.type };
       let status, cls = '';
-      if (w.type === 'laser') {
+      if (w.type === 'shield') {
+        // 量子防护罩：显示耐久 + 状态（升起/收回）
+        status = (w.charge ? '升起' : '收回') + ' · ' + (w.reloadLeft || 0) + '/' + NS.WEAPONS.shield.shieldMax;
+        cls = w.charge ? 'reloading' : 'low';
+      } else if (w.type === 'laser') {
         status = '充能 ' + Math.round((w.charge || 0) * 100) + '%';
         cls = (w.charge || 0) < 0.3 ? 'low' : '';
       } else if (w.reloading) {
@@ -3087,8 +3122,8 @@ import * as THREE from './three.module.min.js';
     const fx = -sin, fz = -cos, rx = cos, rz = -sin;
     const fwd = inputFwd();
     const strafe = inputStrafe();
-    // 守护者量子罩升起时无法移动（与服务端一致）
-    const shieldHeld = me && me.mechType === 'guardian' && !!keys['KeyQ'];
+    // 守护者量子罩升起时无法移动（与服务端一致；F 切换，状态来自服务器）
+    const shieldHeld = me && me.mechType === 'guardian' && !!(me.shield && me.shield.active);
     myVel.x = shieldHeld ? 0 : (fx * fwd + rx * strafe) * MOVE_SPEED * localMoveMul();
     myVel.z = shieldHeld ? 0 : (fz * fwd + rz * strafe) * MOVE_SPEED * localMoveMul();
 
@@ -3285,6 +3320,11 @@ import * as THREE from './three.module.min.js';
         bigMap.classList.remove('hidden');
         drawBigMap();
       }
+    }
+    // 守护者量子罩：F 键点击切换（e.repeat 忽略自动重复）
+    if (e.code === 'KeyF' && started && !pauseOpen && !mechSelecting() && !e.repeat && me && me.mechType === 'guardian') {
+      e.preventDefault();
+      if (socket && socket.connected) socket.emit('shield:toggle');
     }
     if (e.code === 'Escape' && started) {
       e.preventDefault();
@@ -3553,7 +3593,6 @@ import * as THREE from './three.module.min.js';
       strafe: inputStrafe(),
       jump: inputJump(),
       fire: fire || touchFire,
-      shield: !!keys['KeyQ'], // 守护者：Q 升起/收回量子罩
       yaw, pitch,
       aimX: aim.x, aimY: aim.y, aimZ: aim.z,
     });
