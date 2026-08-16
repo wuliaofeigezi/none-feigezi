@@ -264,7 +264,7 @@ class Game {
 
   // 机甲配置列表（机库 2 个槽位），非法输入回退默认
   normalizeMechList(raw) {
-    const list = Array.isArray(raw) ? raw.slice(0, 2) : [];
+    const list = Array.isArray(raw) ? raw.slice(0, 3) : [];
     const out = list.map(normalizeMech);
     if (!out.length) out.push({ type: DEFAULT_MECH, weapons: [] });
     return out;
@@ -337,6 +337,14 @@ class Game {
       return { type: t, ammo: w.mag, reloading: false, reloadEndsAt: 0, fireCd: 0 };
     });
     p.burns = new Map();
+    // 量子防护罩（守护者专属）：active=升起中 / hp=当前耐久 / lastHitAt=上次受击时间
+    p.shield = {
+      active: false,
+      hp: cfg.shieldMax || 0,
+      max: cfg.shieldMax || 0,
+      lastHitAt: 0,
+    };
+    p.input.shield = false;
   }
 
   // 卡牌改变胸部血量上限后，同步现有玩家（不补偿已损毁血量）
@@ -409,6 +417,8 @@ class Game {
       p.input.fwd = clamp(Number(data.fwd) || 0, -1, 1);
       p.input.strafe = clamp(Number(data.strafe) || 0, -1, 1);
       p.input.jump = !!data.jump;
+      // 守护者量子罩：按 Q 升起/收回（收起时机甲可移动）
+      p.input.shield = !!data.shield && MECHS[p.mechType] && !!MECHS[p.mechType].shieldMax;
       // 夺旗者不能开枪
       p.input.fire = !!data.fire && !this.isFlagCarrier(p.id);
       if (Number.isFinite(data.yaw)) p.yaw = data.yaw;
@@ -837,6 +847,7 @@ class Game {
       }
       this.physics(p, dt);
       this.updateWeapons(p, dt, now);
+      this.updateShield(p, dt, now);
       this.checkPickups(p, now);
     }
     this.updateProjectiles(dt, now);
@@ -954,6 +965,14 @@ class Game {
         speed: 90, life: 1.1,
         lockedId: locked ? locked.id : null, // 飞行中温和修正
       });
+      // 曳光弹道（客户端渲染，限流避免超量）
+      if (this.shots.length < 48) {
+        this.shots.push({
+          x1: origin.x, y1: origin.y, z1: origin.z,
+          x2: origin.x + dx * 6, y2: origin.y + dy * 6, z2: origin.z + dz * 6,
+          owner: p.id,
+        });
+      }
       ws.ammo--;
       if (ws.ammo <= 0) { ws.reloading = true; ws.reloadEndsAt = now + w.reloadMs; }
     }
@@ -1004,7 +1023,7 @@ class Game {
     });
     if (hit.player) {
       // 照射持续伤害（无残留灼烧）：光束接触期间每秒 dmgPerSec，停止照射即停止伤害
-      this.damageModule(hit.player, hit.part, w.dmgPerSec * (this.cfg.weaponDmgMul || 1) * dt, p.id, now, hit.legIndex);
+      this.damageModule(hit.player, hit.part, w.dmgPerSec * (this.cfg.weaponDmgMul || 1) * dt, p.id, now, hit.legIndex, true); // 能量伤害：绕过量子罩
     }
   }
 
@@ -1016,6 +1035,42 @@ class Game {
         this.damageModule(p, burn.part, burn.dps * dt, ownerId, now, burn.legIndex);
       }
     }
+  }
+
+  // 守护者量子罩：按输入升起/收回；升起期间静止（物理层已锁）；耐久随时间恢复
+  updateShield(p, dt, now) {
+    if (!p.shield || !p.shield.max) return;
+    const cfg = MECHS[p.mechType] || MECHS[DEFAULT_MECH];
+    if (!cfg.shieldMax) { p.shield.active = false; return; }
+    const s = p.shield;
+    // 耐久恢复：受击后延迟，之后匀速回满
+    if (now - s.lastHitAt >= (cfg.shieldRegenDelayMs || 0)) {
+      s.hp = Math.min(s.max, s.hp + (cfg.shieldRegen || 0) * dt);
+    }
+    // 升起请求：耐久 > 0 才可升起；耐久耗尽自动破盾
+    if (p.input.shield && s.hp > 0) s.active = true;
+    else s.active = false;
+    if (s.active && s.hp <= 0) s.active = false;
+  }
+
+  // 防护罩受击：物理伤害由罩子吸收（返回 true 表示完全吸收，未穿透）
+  absorbShield(victim, dmg, now) {
+    const s = victim.shield;
+    if (!s || !s.active || s.hp <= 0 || dmg <= 0) return false;
+    s.lastHitAt = now;
+    const before = s.hp;
+    s.hp = Math.max(0, s.hp - dmg);
+    // 耐久耗尽：破盾
+    if (s.hp <= 0) s.active = false;
+    // 命中反馈（视觉）
+    if (this.hits.length < 40) {
+      this.hits.push({ shooterId: null, victimId: victim.id, part: 'shield', dmg: Math.round(dmg * 100) / 100 });
+    }
+    if (this.impacts.length < 40) {
+      this.impacts.push({ x: victim.pos.x, y: victim.pos.y + 1.2, z: victim.pos.z });
+    }
+    void before;
+    return true;
   }
 
   // 蜂群巡飞弹：弹夹 5 发一次性全部打出，15 秒装填，有散布，弧线越地形
@@ -1184,8 +1239,11 @@ class Game {
   // ---------- 模块伤害与死亡 ----------
   // part: leg | chest | core；legIdx 可选（不传则随机存活腿）
   // 助攻：记录 10 秒内对目标造成过伤害的射手（击杀时结算）
-  damageModule(victim, part, dmg, killerId, now, legIdx) {
+  // energy=true 表示能量伤害（激光），绕过量子罩；物理伤害先过罩子，罩子吸收则模块不掉血
+  damageModule(victim, part, dmg, killerId, now, legIdx, energy) {
     if (!victim || !victim.alive || !victim.connected || dmg <= 0) return false;
+    // 量子罩吸收物理伤害（激光为能量伤害，绕过护罩）
+    if (!energy && this.absorbShield(victim, dmg, now)) return false;
     // 助攻追踪：10 秒内对目标造成过伤害的玩家（排除自己）
     if (killerId && killerId !== victim.id) {
       if (!victim.recentHits) victim.recentHits = new Map();
@@ -1323,8 +1381,10 @@ class Game {
     const sin = Math.sin(p.yaw), cos = Math.cos(p.yaw);
     const fx = -sin, fz = -cos;
     const rx = cos, rz = -sin;
-    if (spd <= 0) {
-      p.vel.x = 0; p.vel.z = 0; // 蜘蛛 6 腿全毁：失去行动能力
+    // 量子罩升起期间无法移动（守护者技能代价）
+    const shieldLock = !!(p.shield && p.shield.active);
+    if (spd <= 0 || shieldLock) {
+      p.vel.x = 0; p.vel.z = 0; // 蜘蛛 6 腿全毁 / 护盾升起：失去行动能力
     } else {
       p.vel.x = (fx * p.input.fwd + rx * p.input.strafe) * spd;
       p.vel.z = (fz * p.input.fwd + rz * p.input.strafe) * spd;
@@ -1345,7 +1405,7 @@ class Game {
       moveAxis(p.pos, p.vel, 'x', dt, colliders);
       moveAxis(p.pos, p.vel, 'z', dt, colliders);
     }
-    const wantClimb = canClimb && wallBlock && (p.input.fwd !== 0 || p.input.jump);
+    const wantClimb = canClimb && wallBlock && (p.input.fwd !== 0 || p.input.jump) && !(p.shield && p.shield.active);
     p.climbing = wantClimb;
     if (wantClimb) p.vel.y = 7; // 攀爬速度（抵消重力后净上升 ~5.8m/s）
 
@@ -1358,7 +1418,7 @@ class Game {
     // 泰坦跳跃技能：可跳越部分墙体/低掩体；跳跃后需冷却（蜘蛛无跳跃，保留爬墙）
     // 受「弹跳」卡加成（cfg.jumpVel / JUMP_VEL 为卡牌倍率）；旗手跳跃 -35%
     const mechCfg = MECHS[p.mechType] || MECHS[DEFAULT_MECH];
-    if (mechCfg.canJump && p.grounded && p.input.jump && (Date.now() - (p.lastJumpAt || 0)) >= mechCfg.jumpCooldownMs) {
+    if (!(p.shield && p.shield.active) && mechCfg.canJump && p.grounded && p.input.jump && (Date.now() - (p.lastJumpAt || 0)) >= mechCfg.jumpCooldownMs) {
       const carrierMul = (this.mode === 'ctf' && this.isFlagCarrier(p.id)) ? CTF_CARRIER_JUMP_MUL : 1;
       p.vel.y = mechCfg.jumpVel * (this.cfg.jumpVel / JUMP_VEL) * carrierMul;
       p.lastJumpAt = Date.now();
@@ -1509,6 +1569,7 @@ class Game {
         chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
       },
       weapons: this.weaponStateToJSON(p, now),
+      shield: p.shield ? { active: !!p.shield.active, hp: Math.round(p.shield.hp), max: p.shield.max } : null,
       lives: this.mode === 'duel' ? p.lives : null,
       mechIndex: this.mode === 'duel' ? p.mechIndex : null,
       lockId: p.lockId,
@@ -1540,6 +1601,7 @@ class Game {
           legs: p.mech.legs, chest: p.mech.chest, core: p.mech.core,
           chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
         },
+        shield: p.shield ? { active: !!p.shield.active, hp: Math.round(p.shield.hp), max: p.shield.max } : null,
         lives: this.mode === 'duel' ? p.lives : null,
         mechIndex: this.mode === 'duel' ? p.mechIndex : null,
         alive: p.alive, connected: p.connected, kills: p.kills, deaths: p.deaths, score: p.score,

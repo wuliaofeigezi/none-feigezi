@@ -33,7 +33,7 @@ class Room {
   // ---------- 成员管理 ----------
   // 机库配置清洗：最多 2 台机甲 {type, weapons}
   sanitizeMechs(raw) {
-    const list = Array.isArray(raw) ? raw.slice(0, 2) : [];
+    const list = Array.isArray(raw) ? raw.slice(0, 3) : [];
     const out = list.map(normalizeMech);
     if (!out.length) out.push({ type: 'humanoid', weapons: [] });
     return out;

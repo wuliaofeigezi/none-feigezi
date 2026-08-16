@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260901"/>
+<link rel="stylesheet" href="css/style.css?v=20260902"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -158,6 +158,9 @@
   .mh-track > div{height:100%;border-radius:5px;transition:width .15s;}
   #mhChest{background:linear-gradient(90deg,#3b82f6,#22d3ee);}
   #mhCore{background:linear-gradient(90deg,#f59e0b,#ff5c7a);}
+  #mhShield{background:linear-gradient(90deg,#10b981,#7df9a8);}
+  .shield-row.active #mhShield{box-shadow:0 0 8px #7df9a8;}
+  .shield-row.active span{color:#7df9a8;}
   #mhLegs .mh-leg{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:#cfe0ff;}
   #mhLegs .mh-leg span{width:14px;color:#8fa3d8;}
   .mh-leg .mh-track > div{background:linear-gradient(90deg,#10b981,#84cc16);}
@@ -299,6 +302,7 @@
     <div id="mhLegs"></div>
     <div class="mh-row"><span>胸</span><div class="mh-track"><div id="mhChest"></div></div><b id="mhChestTxt">250</b></div>
     <div class="mh-row"><span>核</span><div class="mh-track"><div id="mhCore"></div></div><b id="mhCoreTxt">100</b></div>
+    <div class="mh-row shield-row hidden" id="shieldRow"><span>盾</span><div class="mh-track"><div id="mhShield"></div></div><b id="mhShieldTxt">300</b></div>
   </div>
   <!-- 武器状态 HUD -->
   <div id="weaponHud"></div>
@@ -386,10 +390,16 @@
         <div class="weapon-slots" id="weaponSlots1"></div>
         <div class="weapon-detail" id="weaponDetail1"></div>
       </div>
+      <div class="mech-card" id="mechCard2">
+        <div class="mech-preview" id="mechPreview2"></div>
+        <div class="mech-name">🛡 守护者</div>
+        <div class="weapon-slots" id="weaponSlots2"></div>
+        <div class="weapon-detail" id="weaponDetail2"></div>
+      </div>
     </div>
     <div id="roomList" class="room-list"></div>
     <div class="help" id="helpText">
-      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃<br/>
+      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃 · <b>Q 守护者量子罩</b>（升起挡物理伤害，但无法移动）<br/>
       <b>ESC</b> 打开菜单（可自杀）· <b>长按 J 3 秒</b> 也可自杀<br/>
       💡 腿部损毁会减速（人形 1 腿 -50%、2 腿 -80%；蜘蛛按 5%/25%/50%/80%/95% 递增、6 腿瘫痪），胸部耗尽后核心可能被击穿！
     </div>
@@ -454,8 +464,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260901"></script>
-<script src="js/neon-shared.js?v=20260901"></script>
-<script type="module" src="js/main.js?v=20260901"></script>
+<script src="js/socket.io.min.js?v=20260902"></script>
+<script src="js/neon-shared.js?v=20260902"></script>
+<script type="module" src="js/main.js?v=20260902"></script>
 </body>
 </html>

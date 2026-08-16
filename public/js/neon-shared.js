@@ -83,6 +83,27 @@
       legSpeedMul: [1, 0.95, 0.75, 0.5, 0.2, 0.05, 0],
       legHeight: 0.7, chestHeight: 1.3,
     },
+    // 守护者「壁垒」：双腿(各120) + 胸部(320) + 核心，肩部 3 战斗模块槽
+    // 专属技能：量子防护罩（按 Q 升起，阻挡所有物理伤害；升起期间无法移动；
+    // 防护罩有耐久上限，随时间缓慢恢复，耐久耗尽自动破盾）
+    guardian: {
+      name: '守护者',
+      legs: 2, legHp: 120, chestHp: 320, coreHp: 120,
+      mounts: 3,
+      moveMul: 0.45, // 重型机甲：移速很慢（塔盾型）
+      // 量子防护罩参数
+      shieldMax: 300,           // 耐久上限
+      shieldRegen: 12,          // 每秒恢复
+      shieldRegenDelayMs: 2000, // 受击后延迟开始恢复
+      muzzlePos: [
+        { x: -0.72, y: 1.62, z: 0.18 }, // 左肩
+        { x: 0.72, y: 1.62, z: 0.18 },  // 右肩
+        { x: 0, y: 2.0, z: 0.1 },       // 头顶
+      ],
+      // 损毁 0/1/2 条腿的移速倍率：-0% / -50% / -85%
+      legSpeedMul: [1, 0.5, 0.15],
+      legHeight: 1.0, chestHeight: 1.85,
+    },
   };
   const DEFAULT_MECH = 'humanoid';
 
