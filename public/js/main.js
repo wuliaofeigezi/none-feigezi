@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260828 · 修天空贴图/换机甲模型不同步/死斗不受时长上限约束+房间模式可选手动选死斗 · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260829 · 修复长按J自杀失效（按键自动重复重置计时） · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -1489,6 +1489,7 @@ import * as THREE from './three.module.min.js';
   }
   function startSuicideHold() {
     if (!started || !me || !me.alive || pauseOpen || ctfVoting() || mechSelecting()) return;
+    if (suicideTimer) return; // 已在蓄力：防止重复 keydown（自动重复/多事件）重置计时
     suicideHeldAt = performance.now();
     suicideBar.classList.remove('hidden');
     clearInterval(suicideTimer);
@@ -2765,7 +2766,7 @@ import * as THREE from './three.module.min.js';
       e.preventDefault();
       setPause(!pauseOpen);
     }
-    if (e.code === 'KeyJ' && started && !pauseOpen) startSuicideHold();
+    if (e.code === 'KeyJ' && started && !pauseOpen && !e.repeat) startSuicideHold();
   });
   document.addEventListener('keyup', (e) => {
     keys[e.code] = false;
