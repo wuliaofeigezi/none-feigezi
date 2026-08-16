@@ -115,11 +115,13 @@
       rpm: 720, mag: 480, reloadMs: 15000,
       dmg: 2, canReloadWhileFire: false,
     },
-    // “灼光”镭射激光：光束接触期间每秒 15 伤害，满装填 30s，可边打边装填
+    // “灼光”镭射激光：光束接触期间每秒 32 伤害（均衡调整：原 15 太弱），
+    // 满充能 20s（原 30s 太长），持续照射上限 12s，可边打边充；
+    // 定位：锁定即时命中 + 能量伤害（可绕过守护者量子罩），平均 DPS 与机炮接近
     laser: {
       name: '灼光', type: 'laser',
-      dmgPerSec: 15, burnMs: 10000,
-      chargeFullMs: 30000, maxBeamMs: 10000,
+      dmgPerSec: 32, burnMs: 12000,
+      chargeFullMs: 20000, maxBeamMs: 12000,
       canReloadWhileFire: true,
     },
     // “蜂群”巡飞弹：弹夹 5 发一次性全部打出，装填 15s，追踪锁定目标，每发命中模块 12 伤害

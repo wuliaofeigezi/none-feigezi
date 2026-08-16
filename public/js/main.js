@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260903 · 新增小地图(右上角)+按住M打开大地图 · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260904 · 平衡调整：激光大幅加强(15→32伤/秒、充能30→20s) 三武器均衡 · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
