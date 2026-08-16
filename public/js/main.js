@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260830 · 都市地图完善：贴图sRGB/各向异性修复过暗、部分楼房不可进入(实墙+屋顶) · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260831 · 平衡调整：机炮伤害翻倍(1→2)，巡飞弹削弱(20→12伤、爆炸半径3.2→2.4) · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);

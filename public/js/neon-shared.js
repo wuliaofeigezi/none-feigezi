@@ -88,24 +88,25 @@
 
   // ---------- 战斗模块（武器）定义 ----------
   const WEAPONS = {
-    // Gau12“破坏者”30mm 机炮：720 发/分，480 备弹，装填 15s，不可边打边装填，每发 1 伤害
+    // Gau12“破坏者”30mm 机炮：720 发/分，480 备弹，装填 15s，不可边打边装填，每发 2 伤害
     gau12: {
       name: 'Gau12 破坏者', type: 'bullet',
       rpm: 720, mag: 480, reloadMs: 15000,
-      dmg: 1, canReloadWhileFire: false,
+      dmg: 2, canReloadWhileFire: false,
     },
-    // “灼光”镭射激光：击中后 10 秒内每秒 15 伤害（×3），满装填 30s，可边打边装填
+    // “灼光”镭射激光：光束接触期间每秒 15 伤害，满装填 30s，可边打边装填
     laser: {
       name: '灼光', type: 'laser',
       dmgPerSec: 15, burnMs: 10000,
       chargeFullMs: 30000, maxBeamMs: 10000,
       canReloadWhileFire: true,
     },
-    // “蜂群”巡飞弹：弹夹 5 发一次性全部打出，装填 15s，追踪锁定目标，每发命中模块 20 伤害
+    // “蜂群”巡飞弹：弹夹 5 发一次性全部打出，装填 15s，追踪锁定目标，每发命中模块 12 伤害
+    // 削弱：单发 20→12 伤、爆炸半径 3.2→2.4（更依赖精准命中，不再大范围溅射）
     loiter: {
       name: '蜂群', type: 'loiter',
-      mag: 5, volley: 5, reloadMs: 15000, dmg: 20,
-      spread: 0.07, speed: 26, arcHeight: 16, blastRadius: 3.2,
+      mag: 5, volley: 5, reloadMs: 15000, dmg: 12,
+      spread: 0.07, speed: 26, arcHeight: 16, blastRadius: 2.4,
     },
   };
   const DEFAULT_WEAPON = 'gau12';

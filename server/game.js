@@ -1018,7 +1018,7 @@ class Game {
     }
   }
 
-  // 蜂群巡飞弹：弹夹 5 发一次性全部打出，20 秒装填，有散布，弧线越地形
+  // 蜂群巡飞弹：弹夹 5 发一次性全部打出，15 秒装填，有散布，弧线越地形
   updateLoiter(p, ws, wi, dt, now) {
     const w = WEAPONS.loiter;
     if (ws.reloading) {
