@@ -44,12 +44,13 @@ import * as THREE from './three.module.min.js';
     // 暂停 / 自杀
     pauseMenu = $('pauseMenu'), pauseContinueBtn = $('pauseContinueBtn'),
     pauseSuicideBtn = $('pauseSuicideBtn'), pauseLeaveBtn = $('pauseLeaveBtn'),
-    suicideBar = $('suicideBar'), suicideFill = $('suicideFill');
+    suicideBar = $('suicideBar'), suicideFill = $('suicideFill'),
+    lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash');
 
   // ===== 常量（单一事实来源：public/js/neon-shared.js，禁止在此重复定义） =====
   const NS = window.NeonShared;
   const {
-    TICK_MS, GRAVITY, MOVE_SPEED, JUMP_VEL, MAX_FALL, PLAYER_R, EYE_H,
+    TICK_MS, GRAVITY, MOVE_SPEED, JUMP_VEL, MAX_FALL, PLAYER_R,
     clamp, lerpAngle, toAABB, moveAxis,
   } = NS;
   const SENS = 0.0022;
@@ -104,7 +105,6 @@ import * as THREE from './three.module.min.js';
   let started = false;
   let lastKiller = '';
   let respawnIn = 0, respawnAtLocal = 0;
-  let lastHealth = 100;
   let lastShotAt = 0;
   let lastLockFail = 0; // 指针锁定失败时间戳（限流重试）
   let physAcc = 0; // 固定步长物理累计器
@@ -121,6 +121,7 @@ import * as THREE from './three.module.min.js';
   let hangarRenderers = [];      // 机库 3D 预览 renderer
   let hangarModels = [null, null];
   let selectedMode = 'duel';     // duel(死斗) | ctf(战旗) | zone(占点)
+  let primaryIdx = 0;            // 主战机甲（0=人形 1=蜘蛛；死斗先出主战，其他模式只出主战）
   let mechConfigs = [
     { type: 'humanoid', weapons: ['gau12', 'gau12', 'gau12', 'gau12'] },
     { type: 'spider', weapons: ['gau12', 'gau12', 'gau12'] },
@@ -135,6 +136,16 @@ import * as THREE from './three.module.min.js';
   let pauseOpen = false;
   let suicideHeldAt = 0;         // 长按 J 起始时间
   let suicideTimer = null;
+  // ===== 第三人称 / 自机模型 / 受击反馈 =====
+  let selfModel = null;          // 自机机甲模型（第三人称可见）
+  let selfLastX = 0, selfLastZ = 0;
+  let camShake = 0;              // 受击镜头震动
+  let myClimbing = false;        // 本地预测：蜘蛛爬墙
+  // ===== 索敌锁定 =====
+  let lockTargetId = null;       // 当前锁定目标 id
+  let lockEl = null;             // 锁定框 DOM
+  let lockElDist = null;
+  let lockSentAt = 0;
 
   // ===== Three.js =====
   let renderer, scene, camera;
@@ -408,19 +419,45 @@ import * as THREE from './three.module.min.js';
         });
       });
     }
+    // 主战机甲选择（点击机甲卡）
+    const cards = [mechCard0, mechCard1];
+    const setPrimaryBadge = () => {
+      const names = ['🤖 人形战斗机器人', '🕷 蜘蛛机器人'];
+      cards.forEach((c, i) => {
+        if (!c) return;
+        c.classList.toggle('primary', i === primaryIdx);
+        const b2 = c.querySelector('.mech-name');
+        if (b2) b2.innerHTML = names[i] + (i === primaryIdx ? '<span class="prim-badge">主战</span>' : '');
+      });
+    };
+    cards.forEach((card, idx) => {
+      if (!card) return;
+      card.addEventListener('click', () => {
+        primaryIdx = idx;
+        setPrimaryBadge();
+      });
+    });
+    setPrimaryBadge();
     renderWeaponSlots(0);
     renderWeaponSlots(1);
     setupHangarPreviews();
     if (battleBtn) battleBtn.addEventListener('click', () => {
       myName = (lobbyName.value || '玩家').trim().slice(0, 16);
+      // 主战在前（死斗：先出主战，再出备选；其他模式只出主战）
+      const mechs = primaryIdx === 0 ? mechConfigs : [mechConfigs[1], mechConfigs[0]];
       socket.emit('room:create', {
         name: myName + ' 的房间',
         playerName: myName,
         sessionId: getSessionId(),
         mode: selectedMode,
-        mechs: mechConfigs,
+        mechs,
       });
     });
+    // 机库预览独立渲染循环（修复电脑端预览不显示：不再依赖对局内 frame 循环）
+    (function hangarLoop() {
+      requestAnimationFrame(hangarLoop);
+      if (uiState === 'lobby') renderHangarPreviews(0.016);
+    })();
   }
 
   function renderWeaponSlots(slotIdx) {
@@ -496,112 +533,188 @@ import * as THREE from './three.module.min.js';
     return g;
   }
 
-  // 人形战斗机器人：双腿 + 胸部 + 藏于胸部的核心 + 肩部 4 战斗模块槽
+  // 人形战斗机器人（精细化）：髋/膝两段式双腿、肩甲、胸部装甲板、背部背包、核心、天线
   function buildHumanoidModel(g, o) {
     const color = o.color || 0x3b82f6;
     const dark = new THREE.Color(color).multiplyScalar(0.55);
     const mBody = stdMat(color, 0x0d2a4a);
     const mDark = stdMat(dark, 0x000000);
-    const mLeg = stdMat(0x8899bb, 0x000000, { metalness: 0.55 });
+    const mSteel = stdMat(0x8899bb, 0x000000, { metalness: 0.6 });
+    const mAccent = stdMat(0x22d3ee, 0x0e5a66, { metalness: 0.5 });
     const legs = [];
     for (let i = 0; i < 2; i++) {
       const pivot = new THREE.Group();
-      pivot.position.set(i === 0 ? -0.22 : 0.22, 0.9, 0);
-      const thigh = box(0.28, 0.5, 0.28, mLeg); thigh.position.y = -0.25;
-      const shin = box(0.22, 0.45, 0.22, mDark); shin.position.y = -0.72;
-      const foot = box(0.26, 0.1, 0.4, mDark); foot.position.set(0, -0.92, 0.07);
-      pivot.add(thigh, shin, foot);
+      pivot.position.set(i === 0 ? -0.24 : 0.24, 0.9, 0);
+      // 大腿
+      const thigh = box(0.3, 0.42, 0.3, mSteel); thigh.position.y = -0.21;
+      // 膝关节护甲
+      const knee = box(0.34, 0.14, 0.34, mAccent); knee.position.y = -0.44;
+      // 小腿
+      const shin = box(0.24, 0.42, 0.24, mDark); shin.position.y = -0.68;
+      // 脚掌
+      const foot = box(0.3, 0.12, 0.46, mSteel); foot.position.set(0, -0.9, 0.08);
+      pivot.add(thigh, knee, shin, foot);
       g.add(pivot);
       legs.push(pivot);
     }
-    const chest = box(0.95, 0.7, 0.6, mBody);
-    chest.position.y = 1.4;
+    // 胸部主装甲
+    const chest = box(1.0, 0.72, 0.62, mBody);
+    chest.position.y = 1.42;
     g.add(chest);
-    const core = box(0.32, 0.2, 0.1, new THREE.MeshStandardMaterial({
-      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.9,
+    // 胸甲中线装甲条
+    const plate = box(0.5, 0.6, 0.05, mAccent);
+    plate.position.set(0, 1.42, 0.32);
+    g.add(plate);
+    // 侧面散热口
+    for (const s of [-1, 1]) {
+      const vent = box(0.05, 0.28, 0.3, mDark);
+      vent.position.set(s * 0.53, 1.4, 0);
+      g.add(vent);
+    }
+    // 背部背包（动力单元）
+    const pack = box(0.7, 0.5, 0.28, mDark);
+    pack.position.set(0, 1.35, -0.44);
+    g.add(pack);
+    const packGlow = box(0.5, 0.12, 0.1, stdMat(0x22d3ee, 0x22d3ee, { emissiveIntensity: 0.8 }));
+    packGlow.position.set(0, 1.35, -0.56);
+    g.add(packGlow);
+    // 核心（藏于胸部，发光；胸部破碎后外露脉动）
+    const core = box(0.34, 0.22, 0.1, new THREE.MeshStandardMaterial({
+      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.95,
     }));
-    core.position.set(0, 1.4, 0.31);
+    core.position.set(0, 1.4, 0.34);
     g.add(core);
-    const head = box(0.4, 0.32, 0.32, mDark);
-    head.position.y = 1.86;
+    // 头部 / 天线
+    const head = box(0.42, 0.34, 0.34, mDark);
+    head.position.y = 1.88;
     g.add(head);
-    const eye = box(0.22, 0.1, 0.05, new THREE.MeshStandardMaterial({ color: 0x7df9ff, emissive: 0x22d3ee, emissiveIntensity: 0.8 }));
-    eye.position.set(0, 1.86, 0.17);
-    g.add(eye);
-    // 肩部 4 槽
+    const visor = box(0.26, 0.12, 0.06, stdMat(0x7df9ff, 0x22d3ee, { emissiveIntensity: 0.9 }));
+    visor.position.set(0, 1.88, 0.18);
+    g.add(visor);
+    const antenna = box(0.03, 0.22, 0.03, mSteel);
+    antenna.position.set(0.16, 2.14, 0);
+    const antennaTip = box(0.07, 0.07, 0.07, stdMat(0xff5c7a, 0xff2244, { emissiveIntensity: 0.9 }));
+    antennaTip.position.set(0.16, 2.27, 0);
+    g.add(antenna, antennaTip);
+    // 肩部装甲 + 4 战斗模块槽
     const mounts = [];
-    const mountPos = [[-0.66, 1.6, 0.18], [0.66, 1.6, 0.18], [-0.66, 1.6, -0.18], [0.66, 1.6, -0.18]];
-    for (const [mx, my, mz] of mountPos) {
+    const mountPos = [[-0.7, 1.62, 0.2], [0.7, 1.62, 0.2], [-0.7, 1.62, -0.2], [0.7, 1.62, -0.2]];
+    for (let i = 0; i < mountPos.length; i++) {
+      const [mx, my, mz] = mountPos[i];
+      const pad = box(0.44, 0.1, 0.34, mSteel);
+      pad.position.set(mx, my - 0.1, mz);
+      g.add(pad);
       const pivot = new THREE.Group();
       pivot.position.set(mx, my, mz);
-      pivot.add(box(0.2, 0.12, 0.26, mDark));
       g.add(pivot);
       mounts.push(pivot);
     }
     g.userData = { type: 'humanoid', legs, chest, core, mounts, gait: 0 };
   }
 
-  // 蜘蛛机器人：6 条腿 + 胸部 + 核心 + 胸部两侧/顶部共 3 槽
+  // 蜘蛛机器人（精细化）：六条腿 60° 均匀环绕胸部、腹部隆起、核心、3 战斗模块槽
   function buildSpiderModel(g, o) {
     const color = o.color || 0xa855f7;
     const dark = new THREE.Color(color).multiplyScalar(0.55);
     const mBody = stdMat(color, 0x1a0d2a);
     const mDark = stdMat(dark, 0x000000);
-    const mLeg = stdMat(0xbb99dd, 0x000000, { metalness: 0.55 });
-    const chest = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 1.1), mBody);
-    chest.position.y = 0.85;
+    const mSteel = stdMat(0xbb99dd, 0x000000, { metalness: 0.6 });
+    const mAccent = stdMat(0xff9db8, 0x5a0e2a, { metalness: 0.4 });
+    // 胸部主舱（略扁的六边形舱体：用盒体近似）
+    const chest = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.62, 1.15), mBody);
+    chest.position.y = 0.82;
     g.add(chest);
-    const core = box(0.34, 0.2, 0.1, new THREE.MeshStandardMaterial({
-      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.9,
+    // 腹部（尾部隆起）
+    const abdomen = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.55, 1.0), mDark);
+    abdomen.position.set(0, 0.6, -0.95);
+    abdomen.rotation.x = 0.35;
+    g.add(abdomen);
+    // 头部传感器
+    const head = box(0.4, 0.24, 0.4, mDark);
+    head.position.set(0, 1.05, 0.75);
+    g.add(head);
+    const eye = box(0.22, 0.08, 0.08, stdMat(0x7df9ff, 0x22d3ee, { emissiveIntensity: 0.9 }));
+    eye.position.set(0, 1.05, 0.96);
+    g.add(eye);
+    // 核心（胸部前上方）
+    const core = box(0.36, 0.18, 0.1, new THREE.MeshStandardMaterial({
+      color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 0.95,
     }));
-    core.position.set(0, 0.85, 0.56);
+    core.position.set(0, 0.95, 0.55);
+    core.rotation.x = -0.2;
     g.add(core);
-    // 6 条腿（左右各 3，两段式）
+    // 六条腿：60° 均匀环绕胸部（两段式 + 足尖）
     const legs = [];
-    const sides = [-1, 1];
-    const zOffs = [-0.62, 0, 0.62];
-    for (let s = 0; s < 2; s++) {
-      for (let zz = 0; zz < 3; zz++) {
-        const pivot = new THREE.Group();
-        pivot.position.set(sides[s] * 0.78, 0.72, zOffs[zz]);
-        const thigh = box(0.1, 0.52, 0.1, mLeg);
-        thigh.position.set(sides[s] * 0.3, -0.26, 0);
-        thigh.rotation.z = -sides[s] * 0.55;
-        const shin = box(0.08, 0.44, 0.08, mDark);
-        shin.position.set(sides[s] * 0.6, -0.62, 0);
-        pivot.add(thigh, shin);
-        g.add(pivot);
-        legs.push(pivot);
-      }
+    for (let i = 0; i < 6; i++) {
+      const ang = (i * 60 - 90) * Math.PI / 180; // -90° 起顺时针
+      const pivot = new THREE.Group();
+      pivot.position.set(Math.cos(ang) * 0.8, 0.74, Math.sin(ang) * 0.8);
+      pivot.rotation.y = ang;
+      const thigh = box(0.1, 0.55, 0.1, mSteel);
+      thigh.position.set(0.34, -0.26, 0);
+      thigh.rotation.z = -0.62;
+      const knee = box(0.12, 0.1, 0.12, mAccent);
+      knee.position.set(0.56, -0.52, 0);
+      const shin = box(0.08, 0.46, 0.08, mDark);
+      shin.position.set(0.72, -0.72, 0);
+      shin.rotation.z = 0.3;
+      const foot = box(0.1, 0.06, 0.24, mSteel);
+      foot.position.set(0.86, -0.94, 0);
+      pivot.add(thigh, knee, shin, foot);
+      g.add(pivot);
+      legs.push(pivot);
     }
-    // 胸部两侧 + 顶部 3 槽
+    // 胸部两侧 + 顶部 3 战斗模块槽
     const mounts = [];
-    const mountPos = [[-0.95, 1.0, 0.1], [0.95, 1.0, 0.1], [0, 1.55, 0]];
+    const mountPos = [[-0.95, 1.02, 0.1], [0.95, 1.02, 0.1], [0, 1.5, 0]];
     for (const [mx, my, mz] of mountPos) {
+      const pad = box(0.4, 0.08, 0.3, mSteel);
+      pad.position.set(mx, my - 0.06, mz);
+      g.add(pad);
       const pivot = new THREE.Group();
       pivot.position.set(mx, my, mz);
-      pivot.add(box(0.24, 0.12, 0.26, mDark));
       g.add(pivot);
       mounts.push(pivot);
     }
     g.userData = { type: 'spider', legs, chest, core, mounts, gait: 0 };
   }
 
-  // 武器挂载到战斗模块槽
+  // 武器挂载到战斗模块槽（精细化）
   function mountWeaponVisual(mount, type) {
-    let mesh;
     if (type === 'gau12') {
-      mesh = box(0.14, 0.14, 0.55, new THREE.MeshBasicMaterial({ color: 0x7df9ff }));
-      mesh.position.z = -0.28;
+      // 30mm 机炮：炮管 + 制退器 + 弹箱
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.6, 8), new THREE.MeshStandardMaterial({ color: 0x33415e, metalness: 0.7, roughness: 0.3 }));
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.z = -0.3;
+      const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.1, 8), new THREE.MeshStandardMaterial({ color: 0x7df9ff, metalness: 0.8, roughness: 0.2 }));
+      muzzle.rotation.x = Math.PI / 2;
+      muzzle.position.z = -0.6;
+      const ammo = box(0.22, 0.12, 0.16, new THREE.MeshStandardMaterial({ color: 0x5a3a10, roughness: 0.6 }));
+      ammo.position.set(0, 0.1, -0.2);
+      mount.add(barrel, muzzle, ammo);
     } else if (type === 'laser') {
-      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.42, 8), new THREE.MeshBasicMaterial({ color: 0xff5c7a }));
-      mesh.rotation.x = Math.PI / 2;
-      mesh.position.z = -0.22;
+      // 镭射：发射器球头 + 聚焦环
+      const emitter = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 10), new THREE.MeshStandardMaterial({ color: 0xff5c7a, emissive: 0xff2244, emissiveIntensity: 0.9 }));
+      emitter.position.z = -0.26;
+      const ring1 = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.02, 6, 12), new THREE.MeshStandardMaterial({ color: 0x8899bb, metalness: 0.7 }));
+      ring1.position.z = -0.4;
+      const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.015, 6, 12), new THREE.MeshStandardMaterial({ color: 0x8899bb, metalness: 0.7 }));
+      ring2.position.z = -0.52;
+      const body = box(0.2, 0.14, 0.3, new THREE.MeshStandardMaterial({ color: 0x5a1030 }));
+      body.position.z = -0.1;
+      mount.add(body, emitter, ring1, ring2);
     } else {
-      mesh = box(0.2, 0.16, 0.42, new THREE.MeshBasicMaterial({ color: 0xffb84a }));
-      mesh.position.z = -0.22;
+      // 巡飞弹：5 管发射巢
+      const launcher = box(0.34, 0.2, 0.4, new THREE.MeshStandardMaterial({ color: 0x4a3a10, roughness: 0.5 }));
+      launcher.position.z = -0.2;
+      mount.add(launcher);
+      for (let r = -1; r <= 1; r++) {
+        const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.42, 6), new THREE.MeshStandardMaterial({ color: 0x8899aa, metalness: 0.6 }));
+        tube.rotation.x = Math.PI / 2;
+        tube.position.set(r * 0.11, 0.04, -0.2);
+        mount.add(tube);
+      }
     }
-    mount.add(mesh);
   }
 
   // 腿部步行/瘸腿动画（按损毁腿数）
@@ -615,18 +728,23 @@ import * as THREE from './three.module.min.js';
     ud.gait += Math.min(spd, 12) * dt * 3.2;
     const alive = rp.alive !== false;
     if (ud.type === 'spider') {
-      // 蜘蛛：6 腿交替小步；损毁腿外撇拖行
+      // 蜘蛛：六腿环绕交替步态；损毁腿收起拖行；爬墙时六腿向上攀爬
       for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
         const destroyed = rp.legs && rp.legs[i] <= 0;
-        if (!alive) { leg.rotation.x = 0.3; leg.rotation.z = 0; continue; }
+        if (!alive) { leg.rotation.z = 0; leg.rotation.x = 0; continue; }
+        if (rp.climbing) {
+          // 爬墙：腿交替向上够
+          leg.rotation.z = -0.6 - Math.abs(Math.sin(ud.gait + i * 1.05)) * 0.55;
+          leg.rotation.x = Math.sin(ud.gait * 0.7 + i * 1.05) * 0.3;
+          continue;
+        }
         if (destroyed) {
-          leg.rotation.x = 0.55 + (i % 2) * 0.25; // 抬起拖行
-          leg.rotation.z = (i < 3 ? 1 : -1) * 0.7; // 外撇
+          leg.rotation.z = -0.95 - (i % 2) * 0.2; // 收起拖行
+          leg.rotation.x = 0.35;
         } else {
-          const side = i < 3 ? 1 : -1;
-          leg.rotation.z = side * 0.35 + Math.sin(ud.gait + i * 1.1) * 0.14;
-          leg.rotation.x = Math.sin(ud.gait * 0.5 + i * 0.9) * 0.18;
+          leg.rotation.z = -0.62 + Math.sin(ud.gait * 0.5 + i * 1.05) * 0.16;
+          leg.rotation.x = Math.sin(ud.gait + i * 1.1) * 0.2;
         }
       }
     } else {
@@ -649,6 +767,110 @@ import * as THREE from './three.module.min.js';
       const pulse = rp.chestBroken ? (1 + 0.35 * Math.sin(performance.now() * 0.008)) : 1;
       ud.core.scale.setScalar(pulse);
     }
+  }
+
+  // ---------- 第三人称相机辅助 / 索敌锁定 / 受击反馈 ----------
+  // 相机到玩家的线段与地形求交：撞墙时把相机拉回
+  function collideCamera(x0, y0, z0, x1, y1, z1) {
+    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    const len = Math.hypot(dx, dy, dz);
+    const out = new THREE.Vector3(x1, y1, z1);
+    if (len < 0.01) return out;
+    const steps = Math.max(1, Math.ceil(len / 0.2));
+    let last = new THREE.Vector3(x0, y0, z0);
+    for (let i = 1; i <= steps; i++) {
+      const f = i / steps;
+      const x = x0 + dx * f, y = y0 + dy * f, z = z0 + dz * f;
+      for (const c of colliders) {
+        if (x > c.minX && x < c.maxX && y > c.minY && y < c.maxY && z > c.minZ && z < c.maxZ) {
+          return last;
+        }
+      }
+      last.set(x, y, z);
+    }
+    return out;
+  }
+
+  function projectToScreen(v) {
+    const vec = v.clone().project(camera);
+    const s = gameSize();
+    return { x: (vec.x * 0.5 + 0.5) * s.w, y: (-vec.y * 0.5 + 0.5) * s.h, behind: vec.z > 1 };
+  }
+
+  function sendLock(targetId) {
+    if (socket && socket.connected) socket.emit('lock', { targetId: targetId || null });
+  }
+
+  // 索敌：准星附近（屏幕 70px 内）最近的可锁定敌人；未瞄到敌人时保持当前锁定
+  function updateLockTarget() {
+    if (!started || !me || !me.alive || pauseOpen || ctfVoting()) {
+      if (lockTargetId) { lockTargetId = null; sendLock(null); }
+      return;
+    }
+    const s = gameSize();
+    const cx0 = s.w / 2, cy0 = s.h / 2;
+    const center = new THREE.Vector3();
+    let best = null, bestD3 = Infinity;
+    for (const [id, rp] of remotePlayers) {
+      if (!rp.visible || rp.alive === false) continue;
+      if ((gameMode === 'duel' || gameMode === 'ctf') && rp.team === me.team) continue; // 不锁队友
+      center.copy(rp.target).add({ x: 0, y: 1.1, z: 0 });
+      const v = projectToScreen(center);
+      if (v.behind) continue;
+      if (Math.hypot(v.x - cx0, v.y - cy0) > 70) continue;
+      const d3 = Math.hypot(rp.target.x - myPos.x, rp.target.y - myPos.y, rp.target.z - myPos.z);
+      if (d3 > 60 || d3 >= bestD3) continue;
+      bestD3 = d3;
+      best = id;
+    }
+    if (best && best !== lockTargetId) {
+      lockTargetId = best;
+      sendLock(best);
+    } else if (!best && lockTargetId && !remotePlayers.has(lockTargetId)) {
+      lockTargetId = null;
+      sendLock(null);
+    }
+  }
+
+  // 锁定框跟随锁定目标 + 距离
+  function updateLockBox() {
+    if (!lockBox || !lockDist) return;
+    const show = started && lockTargetId && remotePlayers.has(lockTargetId) && me && me.alive;
+    if (!show) { lockBox.classList.add('hidden'); return; }
+    const rp = remotePlayers.get(lockTargetId);
+    const center = new THREE.Vector3().copy(rp.target).add({ x: 0, y: 1.1, z: 0 });
+    const v = projectToScreen(center);
+    if (v.behind) { lockBox.classList.add('hidden'); return; }
+    lockBox.classList.remove('hidden');
+    lockBox.style.margin = '0';
+    lockBox.style.left = (v.x - 65) + 'px';
+    lockBox.style.top = (v.y - 65) + 'px';
+    const d = Math.hypot(rp.target.x - myPos.x, rp.target.y - myPos.y, rp.target.z - myPos.z);
+    lockDist.textContent = Math.round(d) + 'm';
+  }
+
+  // 命中反馈（我方命中敌人）
+  function showHitmarker(part) {
+    if (!hitmark) return;
+    hitmark.classList.remove('hidden');
+    if (part === 'core') hitmark.style.background = '#ff3355';
+    else hitmark.style.background = '';
+    clearTimeout(showHitmarker._t);
+    showHitmarker._t = setTimeout(() => {
+      hitmark.classList.add('hidden');
+      hitmark.style.background = '';
+    }, 100);
+  }
+
+  // 受击反馈（我被击中）：红闪 + 镜头震动 + 音效
+  function onDamaged(part, dmg) {
+    if (dmgFlash) {
+      dmgFlash.style.opacity = 1;
+      clearTimeout(onDamaged._t);
+      onDamaged._t = setTimeout(() => { dmgFlash.style.opacity = 0; }, 110);
+    }
+    camShake = Math.min(0.9, camShake + 0.18 + (dmg || 0) * 0.004);
+    beep(520, 0.08, 'sawtooth', 0.05);
   }
 
   // ---------- 武器视觉（曳光/激光束/巡飞弹/爆炸） ----------
@@ -800,12 +1022,19 @@ import * as THREE from './three.module.min.js';
     if (!weaponHud || !m || !m.weapons) return;
     const rows = m.weapons.map((w) => {
       const def = NS.WEAPONS[w.type];
-      let status;
-      if (w.type === 'laser') status = '充能 ' + Math.round((w.charge || 0) * 100) + '%';
-      else if (w.reloading) status = '装填中 ' + Math.round((w.reloadPct || 0) * 100) + '%';
-      else status = '备弹 ' + (w.ammo || 0) + '/' + def.mag;
-      const cls = w.reloading ? 'reloading' : '';
-      return '<div class="w-row ' + cls + '"><span class="wn">' + def.name + '</span> <span class="ws">' + status + '</span></div>';
+      let status, cls = '';
+      if (w.type === 'laser') {
+        status = '充能 ' + Math.round((w.charge || 0) * 100) + '%';
+        cls = (w.charge || 0) < 0.3 ? 'low' : '';
+      } else if (w.reloading) {
+        status = '装填 ' + ((w.reloadLeft || 0)).toFixed(1) + 's';
+        cls = 'reloading';
+      } else {
+        status = '备弹 ' + (w.ammo || 0) + ' / ' + def.mag;
+        cls = (w.ammo || 0) <= def.mag * 0.25 ? 'low' : '';
+      }
+      return '<div class="w-row ' + cls + '"><span class="wn">' + def.name + '</span>' +
+        '<span class="ws' + (w.reloading ? ' big' : '') + '">' + status + '</span></div>';
     }).join('');
     weaponHud.innerHTML = rows;
   }
@@ -887,6 +1116,10 @@ import * as THREE from './three.module.min.js';
   function resetGame() {
     started = false;
     me = null;
+    if (selfModel) { scene.remove(selfModel); selfModel = null; }
+    lockTargetId = null;
+    if (lockBox) lockBox.classList.add('hidden');
+    if (socket && socket.connected) sendLock(null);
     for (const id of [...remotePlayers.keys()]) removeRemotePlayer(id);
     for (const m of projMeshes) { m.visible = false; }
     killfeedEl.innerHTML = '';
@@ -1031,6 +1264,17 @@ import * as THREE from './three.module.min.js';
     });
   }
 
+  // 第三人称自机模型（跟随本地预测位置）
+  function buildSelfModel() {
+    if (selfModel) { scene.remove(selfModel); selfModel = null; }
+    if (!me) return;
+    selfModel = buildMechModel(me.mechType, { color: new THREE.Color(me.color) });
+    const mounts = (selfModel.userData && selfModel.userData.mounts) || [];
+    (me.weapons || []).forEach((w, i) => { if (mounts[i]) mountWeaponVisual(mounts[i], w.type); });
+    scene.add(selfModel);
+    selfLastX = myPos.x; selfLastZ = myPos.z;
+  }
+
   function onWelcome(data) {
     me = data.self;
     gameMode = data.mode || 'ffa';
@@ -1046,7 +1290,6 @@ import * as THREE from './three.module.min.js';
     if (!data.resumed) { yaw = me.yaw; pitch = 0; } // 恢复连接时保留当前视角，避免跳变
     grounded = true;
     physAcc = 0;
-    lastHealth = me.health;
     uiState = 'game';
     lobbyPage.classList.add('hidden');
     roomPage.classList.add('hidden');
@@ -1057,6 +1300,8 @@ import * as THREE from './three.module.min.js';
     updateHud(me);
     updateModuleHud(me);   // 首次进入即显示模块血量
     updateWeaponHud(me);
+    buildSelfModel();      // 第三人称自机机甲模型
+    myClimbing = false;
     if (isTouch) {
       showHint('左侧摇杆移动 · 右侧滑动转视角 · 右下开火 · 跳跃', 5000);
     } else {
@@ -1089,6 +1334,8 @@ import * as THREE from './three.module.min.js';
       rp.group.visible = true;
       // 机甲模块损伤状态（驱动瘸腿动画/核心脉冲）
       rp.mechType = sp.mechType || rp.mechType;
+      rp.team = sp.team;
+      rp.climbing = !!sp.climbing;
       rp.legs = (sp.mech && sp.mech.legs) || rp.legs;
       rp.legsDestroyed = (sp.mech && sp.mech.legsDestroyed) || 0;
       rp.chestBroken = !!(sp.mech && sp.mech.chestBroken);
@@ -1159,6 +1406,13 @@ import * as THREE from './three.module.min.js';
     updateExplosions(payload.explosions, TICK_MS / 1000);
     // 死斗 HUD（基地核心部署进度 / 剩余机甲）
     if (gameMode === 'duel' && payload.duel) updateDuelHud(payload.duel);
+    // 命中 / 受击反馈
+    if (payload.hits && me) {
+      for (const h of payload.hits) {
+        if (h.shooterId === me.id && h.victimId !== me.id) showHitmarker(h.part);
+        else if (h.victimId === me.id && h.shooterId !== me.id) onDamaged(h.part, h.dmg);
+      }
+    }
   }
 
   function onMe(m) {
@@ -1176,11 +1430,6 @@ import * as THREE from './three.module.min.js';
       respawnAtLocal = performance.now() + respawnIn;
       deathOverlay.classList.remove('hidden');
     }
-    if (m.health < lastHealth) {
-      hitmark.classList.remove('hidden');
-      setTimeout(() => hitmark.classList.add('hidden'), 120);
-      beep(520, 0.08, 'sawtooth', 0.05);
-    }
     if (!wasAlive && m.alive) {
       myPos.x = m.x; myPos.y = m.y; myPos.z = m.z;
       myVel.x = 0; myVel.y = 0; myVel.z = 0;
@@ -1189,7 +1438,10 @@ import * as THREE from './three.module.min.js';
       curStep.x = myPos.x; curStep.y = myPos.y; curStep.z = myPos.z;
       beep(660, 0.15, 'triangle', 0.08);
     }
-    lastHealth = m.health;
+    // 换机甲时重建自机模型（死斗第二台/重连）
+    if (m.mechType && selfModel && selfModel.userData && selfModel.userData.type !== m.mechType) {
+      buildSelfModel();
+    }
   }
 
   function onKill(k) {
@@ -1200,8 +1452,9 @@ import * as THREE from './three.module.min.js';
   }
 
   function updateHud(m) {
-    healthBar.style.width = m.health + '%';
-    healthText.textContent = Math.ceil(m.health);
+    const hp = m.mech ? m.mech.chest : 100; // 血量条显示胸部模块
+    healthBar.style.width = hp + '%';
+    healthText.textContent = Math.ceil(hp);
     killsEl.textContent = m.kills;
     deathsEl.textContent = m.deaths;
   }
@@ -1503,6 +1756,8 @@ import * as THREE from './three.module.min.js';
       yawT: sp.yaw, yawCur: sp.yaw,
       name: sp.name, visible: true, ghost: false,
       mechType: sp.mechType || 'humanoid',
+      team: sp.team,
+      climbing: !!sp.climbing,
       legs: (sp.mech && sp.mech.legs) || [],
       legsDestroyed: (sp.mech && sp.mech.legsDestroyed) || 0,
       chestBroken: !!(sp.mech && sp.mech.chestBroken),
@@ -1630,8 +1885,20 @@ import * as THREE from './three.module.min.js';
 
     const wasGrounded = grounded;
     grounded = false;
-    moveAxis(myPos, myVel, 'x', dt, colliders);
-    moveAxis(myPos, myVel, 'z', dt, colliders);
+    // 蜘蛛爬墙本地预测（与服务端一致）
+    const canClimbSelf = me && me.mechType === 'spider' && me.mech && me.mech.legs.some((h) => h > 0);
+    let wallBlockSelf = false;
+    if (canClimbSelf) {
+      const vx0 = myVel.x, vz0 = myVel.z;
+      moveAxis(myPos, myVel, 'x', dt, colliders);
+      moveAxis(myPos, myVel, 'z', dt, colliders);
+      wallBlockSelf = (vx0 !== 0 && myVel.x === 0) || (vz0 !== 0 && myVel.z === 0);
+    } else {
+      moveAxis(myPos, myVel, 'x', dt, colliders);
+      moveAxis(myPos, myVel, 'z', dt, colliders);
+    }
+    myClimbing = canClimbSelf && wallBlockSelf && (inputFwd() !== 0 || inputJump());
+    if (myClimbing) myVel.y = 7;
     if (moveAxis(myPos, myVel, 'y', dt, colliders)) grounded = true;
     if (myPos.y <= 0 && myVel.y <= 0) { myPos.y = 0; myVel.y = 0; grounded = true; }
     const half = mapData.size.x / 2 - PLAYER_R;
@@ -1658,7 +1925,7 @@ import * as THREE from './three.module.min.js';
     let dt = (now - lastT) / 1000;
     lastT = now;
     if (dt > 0.25) dt = 0.25; // 防止卡顿/切页造成大步长
-    if (uiState === 'lobby') { renderHangarPreviews(dt); return; }
+    if (uiState === 'lobby') return; // 机库预览由独立 hangarLoop 渲染
     if (!scene) return;
 
     // 平滑位置纠正：状态同步的小偏差按帧衰减应用，消除闪回/抖动
@@ -1688,13 +1955,46 @@ import * as THREE from './three.module.min.js';
     }
     // 物理步之间线性插值渲染：60fps 平滑移动，消除 20Hz 步进卡顿
     const alpha = Math.min(1, physAcc / FIXED_DT);
-    camera.position.set(
-      prevStep.x + (curStep.x - prevStep.x) * alpha,
-      prevStep.y + (curStep.y - prevStep.y) * alpha + EYE_H,
-      prevStep.z + (curStep.z - prevStep.z) * alpha
+    const px = prevStep.x + (curStep.x - prevStep.x) * alpha;
+    const py = prevStep.y + (curStep.y - prevStep.y) * alpha;
+    const pz = prevStep.z + (curStep.z - prevStep.z) * alpha;
+
+    // ===== 第三人称相机（跟随机甲后方，防穿墙） =====
+    const camDist = 4.8, camHgt = 2.1;
+    const cpc = Math.cos(pitch), spc = Math.sin(pitch);
+    const camPos = collideCamera(
+      px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.7, pz + Math.cos(yaw) * cpc * camDist,
+      px, py + 1.4, pz
     );
-    camera.rotation.y = yaw;
-    camera.rotation.x = pitch;
+    camera.position.lerp(camPos, Math.min(1, 12 * dt));
+    if (camShake > 0) {
+      camera.position.x += (Math.random() - 0.5) * camShake * 0.5;
+      camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
+      camShake = Math.max(0, camShake - dt * 10);
+    }
+    camera.lookAt(px - Math.sin(yaw) * 5, py + 1.5 + spc * 5, pz - Math.cos(yaw) * 5);
+
+    // ===== 自机机甲模型（第三人称可见） =====
+    if (selfModel) {
+      selfModel.position.set(px, py, pz);
+      selfModel.rotation.y = yaw;
+      selfModel.visible = !!me && me.alive !== false;
+      const srp = {
+        group: selfModel,
+        legs: (me && me.mech && me.mech.legs) || [],
+        chestBroken: !!(me && me.mech && me.mech.chestBroken),
+        alive: !!(me && me.alive),
+        climbing: myClimbing,
+        target: { x: px, y: py, z: pz },
+        lastX: selfLastX, lastZ: selfLastZ,
+      };
+      animateMechLegs(srp, dt);
+      selfLastX = px; selfLastZ = pz;
+    }
+
+    // ===== 索敌锁定：准星附近自动锁定并上报，锁定框跟随 =====
+    updateLockTarget();
+    updateLockBox();
 
     const k = 1 - Math.exp(-16 * dt);
     for (const rp of remotePlayers.values()) {

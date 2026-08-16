@@ -84,7 +84,7 @@ function once(s, ev, ms) {
 
   const gotState = await new Promise((r) => a.once('state', r));
   console.log('血包数量:', gotState.pickups.length, '| 玩家数:', gotState.players.length);
-  if (!(statesA > 40 && statesB > 40 && gotState.pickups.length === 5)) {
+  if (!(statesA > 40 && statesB > 40 && gotState.pickups.length === 6)) {
     console.log('\n❌ 冒烟基础异常');
     process.exit(1);
   }

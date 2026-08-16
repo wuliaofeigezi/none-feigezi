@@ -136,13 +136,33 @@
   .mh-leg.destroyed .mh-track > div{background:#ff5c7a;}
   .mh-leg.destroyed span{color:#ff5c7a;}
 
-  /* ===== 武器状态 HUD ===== */
-  #weaponHud{position:absolute;right:14px;bottom:90px;display:flex;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none;}
-  .w-row{background:rgba(5,10,25,.7);border:1px solid rgba(125,249,255,.25);border-radius:8px;padding:4px 10px;font-size:11px;color:#cfe0ff;min-width:150px;text-align:right;}
-  .w-row .wn{font-weight:700;}
-  .w-row .ws{font-size:10px;color:#7df9ff;}
-  .w-row.reloading .ws{color:#ffb84a;}
-  .w-row.empty .ws{color:#ff5c7a;}
+  /* ===== 武器状态 HUD（醒目轮盘） ===== */
+  #weaponHud{position:absolute;right:16px;bottom:96px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;}
+  .w-row{background:rgba(5,10,25,.82);border:2px solid rgba(125,249,255,.45);border-radius:10px;padding:7px 14px;min-width:200px;text-align:right;box-shadow:0 0 10px rgba(125,249,255,.12);}
+  .w-row .wn{display:block;font-size:13px;font-weight:700;color:#fff;letter-spacing:.5px;}
+  .w-row .ws{display:block;font-size:13px;font-weight:700;color:#7df9ff;margin-top:1px;}
+  .w-row .ws.big{font-size:17px;color:#ffe9a8;}
+  .w-row.reloading{border-color:#ffb84a;background:rgba(40,28,8,.85);}
+  .w-row.reloading .ws{color:#ffb84a;font-size:16px;}
+  .w-row.low{border-color:#ff5c7a;}
+  .w-row.low .ws{color:#ff5c7a;}
+
+  /* ===== 索敌锁定框 ===== */
+  #lockBox{position:absolute;left:50%;top:50%;width:130px;height:130px;margin:-65px 0 0 -65px;pointer-events:none;z-index:20;}
+  #lockBox::before,#lockBox::after{content:"";position:absolute;width:26px;height:26px;border:3px solid #ff5c7a;filter:drop-shadow(0 0 4px rgba(255,92,122,.8));}
+  #lockBox::before{left:0;top:0;border-right:none;border-bottom:none;}
+  #lockBox::after{right:0;bottom:0;border-left:none;border-top:none;}
+  #lockBox::before:nth-of-type(1){} /* placeholder */
+  #lockDist{position:absolute;left:50%;top:100%;transform:translateX(-50%);margin-top:4px;background:rgba(10,13,30,.85);border:1px solid #ff5c7a;color:#ff9db8;border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;}
+
+  /* ===== 受击红闪 ===== */
+  #dmgFlash{position:fixed;inset:0;pointer-events:none;z-index:15;background:radial-gradient(ellipse at center,transparent 42%,rgba(255,40,60,.5) 100%);opacity:0;transition:opacity .12s;}
+
+  /* ===== 机库主战选中态 ===== */
+  .mech-card{cursor:pointer;transition:.15s;}
+  .mech-card.primary{border-color:#ffb84a;box-shadow:0 0 16px rgba(255,184,74,.4);}
+  .mech-card .prim-badge{display:none;}
+  .mech-card.primary .prim-badge{display:inline-block;margin-left:6px;color:#ffb84a;font-size:11px;border:1px solid #b98a1f;border-radius:8px;padding:0 6px;}
 
   /* ===== 死斗 HUD ===== */
   #duelHud{position:absolute;top:70px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none;z-index:5;}
@@ -229,6 +249,10 @@
   </div>
   <!-- 长按 J 自杀进度 -->
   <div id="suicideBar" class="hidden"><div id="suicideFill"></div><span>长按 J 自杀中…</span></div>
+  <!-- 受击红闪 -->
+  <div id="dmgFlash"></div>
+  <!-- 索敌锁定框 -->
+  <div id="lockBox" class="hidden"><span id="lockDist"></span></div>
 
   <!-- CTF 夺旗卡牌赛 UI -->
   <div id="ctfUI" class="hidden">

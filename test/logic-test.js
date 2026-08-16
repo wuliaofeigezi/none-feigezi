@@ -213,6 +213,33 @@ for (let i = 0; i < 6; i++) {
 }
 assert(pB.legsDestroyed === 6, '6 腿应全部损毁');
 
+// ---- 14.5 蜘蛛爬墙：贴墙朝墙移动时垂直上升 ----
+pB.mech.legs = [100, 100, 100, 100, 100, 100];
+pB.legsDestroyed = 0;
+place(pB, -26, -30); // 高塔西侧（塔 x -33..-27）
+input(B, { fwd: 1, yaw: Math.PI / 2 }); // 朝 -x 走向塔壁
+let climbed = false;
+for (let i = 0; i < 40; i++) {
+  game.tick();
+  if (pB.pos.y > 2) { climbed = true; break; }
+}
+console.log('蜘蛛爬墙后 y:', pB.pos.y.toFixed(2), 'climbing:', pB.climbing);
+assert(climbed, '蜘蛛应能爬墙上升');
+
+// ---- 14.6 武器索敌：锁定后即使不瞄向目标也能精准命中 ----
+setWeapon(pA, 'gau12');
+game.onLock('A', { targetId: 'B' }); // 客户端上报锁定 B
+place(pA, 0, 12);
+place(pB, 0, 16);
+input(A, { fire: true, yaw: 0, pitch: 0 }); // 瞄向 -z（完全背对 B）
+const lockSum0 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
+game.tick();
+input(A, { fire: false });
+game.onLock('A', { targetId: null }); // 解除锁定
+const lockSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
+console.log('索敌命中后模块总血量:', lockSum1, '<', lockSum0);
+assert(lockSum1 < lockSum0, '锁定时应命中锁定目标（即使未瞄向目标）');
+
 // ---- 15. 死斗模式：两次生命 + 基地核心判定 ----
 const D = fakeSocket('D');
 const E = fakeSocket('E');

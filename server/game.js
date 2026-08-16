@@ -60,6 +60,9 @@ const DUEL_BASES = [
 const DUEL_CORE_RADIUS = 4.5;    // 核心判定半径
 const DUEL_DEPLOY_SEC = 10;      // 部署装置所需秒数
 
+// 武器索敌（锁定）
+const LOCK_RANGE = 70;           // 锁定最大距离（米）
+
 // FragPunk 式卡牌池：apply 修改本回合 cfg（数值已适配机甲武器系统）
 const CARD_POOL = [
   { id: 'speed', name: '疾风', desc: '全体移速 +50%', apply: (g) => { g.cfg.moveSpeed *= 1.5; } },
@@ -116,6 +119,7 @@ class Game {
     this.shots = [];         // 机炮曳光（本 tick 内累积，广播后清空）
     this.beams = [];         // 激光束（本 tick）
     this.explosions = [];    // 爆炸（本 tick）
+    this.hits = [];          // 命中反馈（本 tick）：{shooterId, victimId, part, dmg}
     this.killfeed = [];
     this.pickups = MAP.pickups.map((p, i) => ({
       id: i, x: p.x, z: p.z, type: 'health', active: true, respawnAt: 0,
@@ -222,6 +226,7 @@ class Game {
       socket.removeListener('vote', socket._naGame.vote);
       socket.removeListener('ping', socket._naGame.ping);
       socket.removeListener('suicide', socket._naGame.suicide);
+      socket.removeListener('lock', socket._naGame.lock);
       socket.removeListener('disconnect', socket._naGame.disconnect);
     }
     const h = {
@@ -229,6 +234,7 @@ class Game {
       vote: (d) => this.onVote(p.id, d),
       ping: (cb) => { if (typeof cb === 'function') cb(Date.now()); },
       suicide: () => this.onSuicide(p.id),
+      lock: (d) => this.onLock(p.id, d),
       disconnect: () => this.onLeave(p.id),
     };
     socket._naGame = h;
@@ -286,6 +292,7 @@ class Game {
       mechIndex: 0,    // 当前出战机甲下标
       lives: this.mode === 'duel' ? mechs.length : Infinity,
       burns: new Map(),// 激光灼烧：ownerId -> {dps, endsAt, part, legIndex}
+      lockId: null,    // 武器索敌锁定目标 socketId（客户端上报，服务端校验）
     };
     this.applyMech(p, mechs[0]);
     return p;
@@ -337,9 +344,17 @@ class Game {
     if (!p) return;
     this.players.delete(id);
     this.projectiles = this.projectiles.filter((pr) => pr.owner !== id);
+    this.clearLocksOn(id);
     this.emit('playerLeft', { id });
     console.log(`[neon-arena][${this.roomId}] [-] ${p.name} 移除`);
     if (this.hooks.onPlayerGone) this.hooks.onPlayerGone(id);
+  }
+
+  // 目标死亡/离开后，清除所有玩家对它的锁定
+  clearLocksOn(targetId) {
+    for (const p of this.players.values()) {
+      if (p.lockId === targetId) p.lockId = null;
+    }
   }
 
   pickSpawn(team) {
@@ -383,6 +398,39 @@ class Game {
     const p = this.players.get(playerId);
     if (!this.active || !p || !p.connected || !p.alive) return;
     this.killPlayer(p, null, Date.now(), 'suicide');
+  }
+
+  // ---------- 武器索敌（锁定） ----------
+  // 客户端瞄准敌人时上报锁定；锁定后武器即使不瞄向目标也能精准命中
+  onLock(playerId, data) {
+    const p = this.players.get(playerId);
+    if (!this.active || !p || !p.connected || !p.alive || !data) return;
+    const tid = data.targetId;
+    if (tid === null || tid === undefined) { p.lockId = null; return; }
+    if (typeof tid !== 'string' || tid === playerId) { p.lockId = null; return; }
+    const t = this.players.get(tid);
+    if (!t || !t.alive || !t.connected) { p.lockId = null; return; }
+    if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return; }
+    const dx = t.pos.x - p.pos.x, dz = t.pos.z - p.pos.z;
+    if (dx * dx + dz * dz > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return; }
+    p.lockId = tid;
+  }
+
+  // 返回当前有效锁定目标（或 null）
+  validLock(p) {
+    if (!p.lockId) return null;
+    const t = this.players.get(p.lockId);
+    if (!t || !t.alive || !t.connected) { p.lockId = null; return null; }
+    if (isTeamMode(this.mode) && t.team === p.team) { p.lockId = null; return null; }
+    const dx = t.pos.x - p.pos.x, dz = t.pos.z - p.pos.z;
+    if (dx * dx + dz * dz > LOCK_RANGE * LOCK_RANGE) { p.lockId = null; return null; }
+    return t;
+  }
+
+  // 锁定命中时的模块判定：50% 腿（随机存活腿）/ 50% 胸部
+  lockedModule(t) {
+    const part = Math.random() < 0.5 ? MODULE_LEG : MODULE_CHEST;
+    return { part, legIndex: part === MODULE_LEG ? this.randomAliveLeg(t) : null };
   }
 
   // ---------- CTF：卡牌投票 ----------
@@ -590,6 +638,7 @@ class Game {
     this.shots = [];
     this.beams = [];
     this.explosions = [];
+    this.hits = [];
     // 全员退出/断线超时 → 直接结束对局，避免空房间泄漏
     if (this.players.size === 0) { this.endGame(); return; }
     // 对局时长到点 → 结束
@@ -693,7 +742,7 @@ class Game {
     return n;
   }
 
-  // Gau12 破坏者：720 发/分，命中一发 1 伤害，不可边打边装填
+  // Gau12 破坏者：720 发/分，命中一发 1 伤害，不可边打边装填；索敌锁定后精准命中锁定目标
   updateGau12(p, ws, dt, now) {
     const w = WEAPONS.gau12;
     if (ws.reloading) {
@@ -706,9 +755,20 @@ class Game {
       const rpmMul = this.cfg.weaponRpmMul || 1;
       ws.fireCd = 60 / w.rpm / rpmMul;
       const origin = this.muzzle(p);
-      const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
-      const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
-      const hit = this.rayHit(origin, dir, 60, p);
+      const locked = this.validLock(p);
+      let hit = null;
+      if (locked) {
+        // 索敌锁定：弹道精准指向锁定目标（无视当前瞄向）
+        const lm = this.lockedModule(locked);
+        hit = {
+          point: { x: locked.pos.x, y: locked.pos.y + 0.9, z: locked.pos.z },
+          player: locked, part: lm.part, legIndex: lm.legIndex,
+        };
+      } else {
+        const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
+        const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+        hit = this.rayHit(origin, dir, 60, p);
+      }
       if (hit.player) {
         this.damageModule(hit.player, hit.part, w.dmg * (this.cfg.weaponDmgMul || 1), p.id, now, hit.legIndex);
       }
@@ -723,7 +783,7 @@ class Game {
     }
   }
 
-  // 镭射激光：持续光束，命中施加灼烧（每秒 5 伤害，持续 10 秒），30 秒满充能且可边打边充
+  // 镭射激光：持续光束，命中施加灼烧（每秒 5 伤害，持续 10 秒），30 秒满充能且可边打边充；索敌后光束指向锁定目标
   updateLaser(p, ws, dt, now) {
     const w = WEAPONS.laser;
     // 始终充能（可边打边装填）
@@ -733,9 +793,19 @@ class Game {
     if (ws.charge <= 0.01) { ws.beam = false; return; }
     ws.beam = true;
     const origin = this.muzzle(p);
-    const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
-    const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
-    const hit = this.rayHit(origin, dir, 60, p);
+    const locked = this.validLock(p);
+    let hit = null;
+    if (locked) {
+      const lm = this.lockedModule(locked);
+      hit = {
+        point: { x: locked.pos.x, y: locked.pos.y + 0.9, z: locked.pos.z },
+        player: locked, part: lm.part, legIndex: lm.legIndex,
+      };
+    } else {
+      const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
+      const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+      hit = this.rayHit(origin, dir, 60, p);
+    }
     this.beams.push({
       owner: p.id,
       x1: origin.x, y1: origin.y, z1: origin.z,
@@ -778,13 +848,21 @@ class Game {
     }
     if (!p.input.fire || ws.ammo < w.volley) return;
     const origin = this.muzzle(p);
+    const locked = this.validLock(p);
     const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
     const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
     for (let i = 0; i < w.volley; i++) {
-      // 瞄准点：视线与地面交点 + 随机散布偏移
-      const tGround = (dir.y < -0.01) ? (-origin.y / dir.y) : 60;
-      const gx = origin.x + dir.x * tGround;
-      const gz = origin.z + dir.z * tGround;
+      let gx, gz;
+      if (locked) {
+        // 索敌锁定：巡飞弹直接飞向锁定目标当前位置（仍带小散布）
+        gx = locked.pos.x;
+        gz = locked.pos.z;
+      } else {
+        // 瞄准点：视线与地面交点
+        const tGround = (dir.y < -0.01) ? (-origin.y / dir.y) : 60;
+        gx = origin.x + dir.x * tGround;
+        gz = origin.z + dir.z * tGround;
+      }
       const ang = Math.random() * Math.PI * 2;
       const rad = Math.random() * w.spread * Math.max(5, Math.hypot(gx - origin.x, gz - origin.z));
       const tx = gx + Math.cos(ang) * rad;
@@ -851,6 +929,10 @@ class Game {
   // part: leg | chest | core；legIdx 可选（不传则随机存活腿）
   damageModule(victim, part, dmg, killerId, now, legIdx) {
     if (!victim || !victim.alive || !victim.connected || dmg <= 0) return false;
+    // 命中反馈（限流，避免每 tick 数十条）
+    if (this.hits.length < 40) {
+      this.hits.push({ shooterId: killerId, victimId: victim.id, part, dmg: Math.round(dmg * 100) / 100 });
+    }
     const m = victim.mech;
     if (part === MODULE_LEG) {
       const idx = (Number.isInteger(legIdx) && m.legs[legIdx] > 0)
@@ -904,6 +986,8 @@ class Game {
       killer.score += (this.mode === 'zone') ? 10 : 100;
       this.sendMe(killer);
     }
+    this.clearLocksOn(victim.id);
+    victim.lockId = null;
     this.killfeed.unshift({
       id: Math.random().toString(36).slice(2, 8),
       killer: killer ? killer.name : (cause === 'suicide' ? '自爆' : '?'),
@@ -964,8 +1048,22 @@ class Game {
     const wasGrounded = p.grounded;
     p.grounded = false;
 
-    moveAxis(p.pos, p.vel, 'x', dt, colliders);
-    moveAxis(p.pos, p.vel, 'z', dt, colliders);
+    // 蜘蛛爬墙：贴墙且朝墙移动（或跳跃键）时垂直攀爬；超过墙顶自然脱离
+    const canClimb = p.mechType === 'spider' && spd > 0 && p.mech.legs.some((h) => h > 0);
+    let wallBlock = false;
+    if (canClimb) {
+      const vx0 = p.vel.x, vz0 = p.vel.z;
+      moveAxis(p.pos, p.vel, 'x', dt, colliders);
+      moveAxis(p.pos, p.vel, 'z', dt, colliders);
+      wallBlock = (vx0 !== 0 && p.vel.x === 0) || (vz0 !== 0 && p.vel.z === 0);
+    } else {
+      moveAxis(p.pos, p.vel, 'x', dt, colliders);
+      moveAxis(p.pos, p.vel, 'z', dt, colliders);
+    }
+    const wantClimb = canClimb && wallBlock && (p.input.fwd !== 0 || p.input.jump);
+    p.climbing = wantClimb;
+    if (wantClimb) p.vel.y = 7; // 攀爬速度（抵消重力后净上升 ~5.8m/s）
+
     if (moveAxis(p.pos, p.vel, 'y', dt, colliders)) p.grounded = true;
 
     if (p.pos.y <= 0 && p.vel.y <= 0) {
@@ -1099,6 +1197,7 @@ class Game {
       carrying: this.mode === 'ctf' && this.isFlagCarrier(p.id),
       x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw,
       mechType: p.mechType,
+      climbing: !!p.climbing,
       mech: {
         legs: p.mech.legs, chest: p.mech.chest, chestMax: p.mech.chestMax, core: p.mech.core,
         chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
@@ -1107,6 +1206,7 @@ class Game {
         type: ws.type,
         ammo: (ws.ammo !== undefined) ? ws.ammo : null,
         reloading: !!ws.reloading,
+        reloadLeft: ws.reloading ? Math.max(0, Math.ceil((ws.reloadEndsAt - now) / 100) / 10) : 0,
         reloadPct: ws.reloading
           ? clamp(1 - (ws.reloadEndsAt - now) / WEAPONS[ws.type].reloadMs, 0, 1)
           : (ws.ammo !== undefined ? ws.ammo / WEAPONS[ws.type].mag : 1),
@@ -1133,6 +1233,7 @@ class Game {
         x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw,
         mechType: p.mechType,
         weapons: p.weapons,
+        climbing: !!p.climbing,
         mech: {
           legs: p.mech.legs, chest: p.mech.chest, core: p.mech.core,
           chestBroken: p.mech.chestBroken, legsDestroyed: p.legsDestroyed,
@@ -1177,7 +1278,7 @@ class Game {
       t: now, mode: this.mode,
       zone: { x: this.zone.x, z: this.zone.z, y: this.zone.y, r: ZONE_R, nextMoveAt: this.zone.nextMoveAt },
       players, projectiles: projs, pickups, killfeed: this.killfeed, ctf, duel,
-      shots: this.shots, beams: this.beams, explosions: this.explosions,
+      shots: this.shots, beams: this.beams, explosions: this.explosions, hits: this.hits,
     });
   }
 }
