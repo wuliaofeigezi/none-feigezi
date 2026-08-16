@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
-<title>????????Neon Arena ??3D ??????</title>
+<title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
 <link rel="stylesheet" href="css/style.css?v=20260822"/>
 <style>
-  /* ===== ??? / ??? / ??? ???????????? ===== */
+  /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
     background:radial-gradient(ellipse at 50% 30%,#1b1f3a 0%,#0b0d1d 70%);}
   .hidden{display:none !important;}
@@ -60,7 +60,7 @@
     color:#ffd7e4;padding:10px 18px;border-radius:10px;font-size:13px;box-shadow:0 4px 18px rgba(0,0,0,.5);}
   #connStatus{margin-top:10px;color:#8fa3d8;font-size:12px;text-align:center;}
 
-  /* ===== CTF ????????===== */
+  /* ===== CTF 夺旗卡牌赛 ===== */
   #ctfUI{position:absolute;top:14px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none;z-index:5;}
   .ctf-top{display:flex;gap:12px;align-items:center;justify-content:center;font-size:15px;font-weight:700;
     background:rgba(10,13,30,.72);border:1px solid #2b3a7a;border-radius:10px;padding:6px 14px;color:#fff;}
@@ -87,7 +87,7 @@
   .vp-card .vp-desc{display:block;font-size:12px;color:#9fb3e8;}
   .vp-card .vp-votes{display:block;margin-top:9px;font-size:12px;color:#7df9ff;}
   .vp-card.vp-picked{border-color:#ffe9a8;background:#2a2a55;box-shadow:0 0 16px rgba(255,233,168,.4);}
-  .vp-card.vp-picked .vp-name::after{content:' ??;color:#ffe9a8;}
+  .vp-card.vp-picked .vp-name::after{content:' ✓';color:#ffe9a8;}
   .vp-card.vp-picked .vp-votes{color:#ffe9a8;font-weight:700;}
   .vp-card.vp-dim{opacity:.4;}
   .vp-card.vp-pop{animation:vpPop .32s ease;}
@@ -99,7 +99,7 @@
   .ctf-team-tag{font-size:12px;margin-left:6px;}
   @media (max-width:480px){ .panel{padding:16px;} .panel h1{font-size:24px;} }
 
-  /* ===== ???????????===== */
+  /* ===== 机库（原大厅） ===== */
   .hangar-panel{width:min(860px,94vw);}
   .hangar-row .btn{margin-left:0;}
   .mode-btns{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
@@ -120,7 +120,7 @@
   .weapon-slot.w-laser .ws-name{color:#ff9db8;}
   .weapon-slot.w-loiter .ws-name{color:#ffd98a;}
 
-  /* ===== ????????? / ?????? ===== */
+  /* ===== 顶部存活人数 / 大局比分 ===== */
   #teamAlive{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center;pointer-events:none;z-index:6;}
   .ta-group{display:flex;gap:3px;background:rgba(10,13,30,.72);border:1px solid #2b3a7a;border-radius:10px;padding:4px 10px;}
   .ta-group.red{border-color:#a33b5c;}
@@ -129,7 +129,7 @@
   .ta-icon.dead{filter:grayscale(1) brightness(.35);opacity:.45;}
   .ta-vs{font-size:12px;font-weight:700;color:#ffe9a8;background:rgba(10,13,30,.72);border:1px solid #b98a1f;border-radius:10px;padding:4px 10px;white-space:nowrap;}
 
-  /* ===== ?????? HUD ===== */
+  /* ===== 机甲模块 HUD ===== */
   #moduleHud{position:absolute;left:14px;bottom:90px;width:210px;background:rgba(5,10,25,.72);border:1px solid rgba(125,249,255,.3);border-radius:10px;padding:8px 10px;pointer-events:none;}
   .mh-title{font-size:11px;color:#7dd3fc;margin-bottom:4px;}
   .mh-row{display:flex;align-items:center;gap:6px;font-size:11px;color:#cfe0ff;margin-top:3px;}
@@ -145,7 +145,7 @@
   .mh-leg.destroyed .mh-track > div{background:#ff5c7a;}
   .mh-leg.destroyed span{color:#ff5c7a;}
 
-  /* ===== ???????HUD????????? ===== */
+  /* ===== 武器状态 HUD（醒目轮盘） ===== */
   #weaponHud{position:absolute;right:16px;bottom:96px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;}
   .w-row{background:rgba(5,10,25,.82);border:2px solid rgba(125,249,255,.45);border-radius:10px;padding:7px 14px;min-width:200px;text-align:right;box-shadow:0 0 10px rgba(125,249,255,.12);}
   .w-row .wn{display:block;font-size:13px;font-weight:700;color:#fff;letter-spacing:.5px;}
@@ -156,7 +156,7 @@
   .w-row.low{border-color:#ff5c7a;}
   .w-row.low .ws{color:#ff5c7a;}
 
-  /* ===== ????????===== */
+  /* ===== 索敌锁定框 ===== */
   #lockBox{position:absolute;left:50%;top:50%;width:130px;height:130px;margin:-65px 0 0 -65px;pointer-events:none;z-index:20;}
   #lockBox::before,#lockBox::after{content:"";position:absolute;width:26px;height:26px;border:3px solid #ff5c7a;filter:drop-shadow(0 0 4px rgba(255,92,122,.8));}
   #lockBox::before{left:0;top:0;border-right:none;border-bottom:none;}
@@ -164,16 +164,16 @@
   #lockBox::before:nth-of-type(1){} /* placeholder */
   #lockDist{position:absolute;left:50%;top:100%;transform:translateX(-50%);margin-top:4px;background:rgba(10,13,30,.85);border:1px solid #ff5c7a;color:#ff9db8;border-radius:6px;padding:2px 10px;font-size:13px;font-weight:700;white-space:nowrap;}
 
-  /* ===== ?????? ===== */
+  /* ===== 受击红闪 ===== */
   #dmgFlash{position:fixed;inset:0;pointer-events:none;z-index:15;background:radial-gradient(ellipse at center,transparent 42%,rgba(255,40,60,.5) 100%);opacity:0;transition:opacity .12s;}
 
-  /* ===== ???????????===== */
+  /* ===== 机库主战选中态 ===== */
   .mech-card{cursor:pointer;transition:.15s;}
   .mech-card.primary{border-color:#ffb84a;box-shadow:0 0 16px rgba(255,184,74,.4);}
   .mech-card .prim-badge{display:none;}
   .mech-card.primary .prim-badge{display:inline-block;margin-left:6px;color:#ffb84a;font-size:11px;border:1px solid #b98a1f;border-radius:8px;padding:0 6px;}
 
-  /* ===== ??? HUD ===== */
+  /* ===== 死斗 HUD ===== */
   #duelHud{position:absolute;top:70px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none;z-index:5;}
   #duelLives{font-size:14px;font-weight:700;color:#ffe9a8;background:rgba(10,13,30,.7);border:1px solid #2b3a7a;border-radius:10px;padding:5px 14px;display:inline-block;margin-bottom:6px;}
   .duel-cores{display:flex;gap:10px;justify-content:center;}
@@ -186,14 +186,14 @@
   .duel-core.blue .duel-core-fill{background:#5c9cff;}
   .duel-core.down .duel-core-fill{background:#444 !important;}
 
-  /* ===== ?????? / ?????? ===== */
+  /* ===== 暂停菜单 / 自杀进度 ===== */
   #pauseMenu{position:fixed;inset:0;z-index:90;background:rgba(5,8,20,.7);display:flex;align-items:center;justify-content:center;}
   .pm-panel{background:rgba(14,18,44,.96);border:1px solid #4f6bff;border-radius:14px;padding:24px 30px;display:flex;flex-direction:column;gap:10px;min-width:220px;}
   .pm-panel h2{margin:0 0 6px;color:#fff;text-align:center;}
   #suicideBar{position:fixed;bottom:120px;left:50%;transform:translateX(-50%);z-index:95;width:280px;background:rgba(20,8,14,.9);border:1px solid #ff5c7a;border-radius:10px;padding:8px 12px;color:#ffd7e4;font-size:12px;text-align:center;}
   #suicideFill{height:6px;width:0;background:#ff5c7a;border-radius:3px;margin-bottom:6px;transition:width .1s linear;}
 
-  /* ===== ?????????? ===== */
+  /* ===== 局内选择机甲 ===== */
   #mechSelect{position:fixed;inset:0;z-index:88;background:rgba(5,8,20,.65);display:flex;align-items:center;justify-content:center;pointer-events:auto;}
   .ms-panel{background:rgba(14,18,44,.97);border:1px solid #ffb84a;border-radius:14px;padding:22px 26px;text-align:center;pointer-events:auto;}
   .ms-panel h2{margin:0 0 12px;color:#ffe9a8;}
@@ -216,7 +216,7 @@
   #msConfirm{font-size:15px;padding:10px 30px;cursor:pointer;transition:transform .08s,filter .15s;}
   #msConfirm:active{transform:scale(.95);}
 
-  /* ===== ????????????????????===== */
+  /* ===== 暂停菜单（修复点击无反应） ===== */
   #pauseMenu{position:fixed;inset:0;z-index:90;background:rgba(5,8,20,.7);display:flex;align-items:center;justify-content:center;pointer-events:auto;}
   .pm-panel{background:rgba(14,18,44,.96);border:1px solid #4f6bff;border-radius:14px;padding:24px 30px;display:flex;flex-direction:column;gap:10px;min-width:220px;pointer-events:auto;}
 </style>
@@ -233,16 +233,16 @@
     <span id="healthText">100</span>
   </div>
   <div id="cooldown" class="hidden"></div>
-  <div id="scoreWrap">??? <b id="kills">0</b> ? ??? <b id="deaths">0</b> ? ??? <b id="ping">--</b>ms</div>
+  <div id="scoreWrap">击杀 <b id="kills">0</b> · 死亡 <b id="deaths">0</b> · 延迟 <b id="ping">--</b>ms</div>
   <div id="zoneUI" class="hidden">
-    <div id="modeLabel">??????</div>
-    <div id="zoneScore">??? <b id="zonePts">0</b> / 120</div>
+    <div id="modeLabel">占点模式</div>
+    <div id="zoneScore">积分 <b id="zonePts">0</b> / 120</div>
     <div id="zoneBar"><div id="zoneBarFill"></div></div>
-    <div id="zoneStatus">????????/div>
+    <div id="zoneStatus">前往占领区</div>
   </div>
   <div id="banner" class="hidden"></div>
   <div id="leaderboard">
-    <div class="lb-title">?? ?????/div>
+    <div class="lb-title">🏆 排行榜</div>
     <div id="lbList"></div>
   </div>
   <div id="killfeed"></div>
@@ -251,170 +251,170 @@
     <div id="respawnText"></div>
   </div>
   <div id="lookHint" class="hidden"></div>
-  <!-- ????????????????????????? ????????? -->
+  <!-- 顶部每方存活人数（熄灭=无法复活）+ 死斗大局比分 -->
   <div id="teamAlive" class="hidden">
     <div class="ta-group red" id="taRed"></div>
-    <div class="ta-vs">??? <span id="taScore">0 : 0</span></div>
+    <div class="ta-vs">大局 <span id="taScore">0 : 0</span></div>
     <div class="ta-group blue" id="taBlue"></div>
   </div>
   <div id="touchUI" class="hidden">
     <div id="joyBase"><div id="joyKnob"></div></div>
-    <div id="fireBtn">????/div>
-    <div id="jumpBtn">???</div>
+    <div id="fireBtn">开火</div>
+    <div id="jumpBtn">跳跃</div>
   </div>
 
-  <!-- ?????? HUD -->
+  <!-- 机甲模块 HUD -->
   <div id="moduleHud">
-    <div class="mh-title">???</div>
+    <div class="mh-title">模块</div>
     <div id="mhLegs"></div>
-    <div class="mh-row"><span>??/span><div class="mh-track"><div id="mhChest"></div></div><b id="mhChestTxt">250</b></div>
-    <div class="mh-row"><span>??/span><div class="mh-track"><div id="mhCore"></div></div><b id="mhCoreTxt">100</b></div>
+    <div class="mh-row"><span>胸</span><div class="mh-track"><div id="mhChest"></div></div><b id="mhChestTxt">250</b></div>
+    <div class="mh-row"><span>核</span><div class="mh-track"><div id="mhCore"></div></div><b id="mhCoreTxt">100</b></div>
   </div>
-  <!-- ???????HUD -->
+  <!-- 武器状态 HUD -->
   <div id="weaponHud"></div>
-  <!-- ??? HUD -->
+  <!-- 死斗 HUD -->
   <div id="duelHud" class="hidden">
     <div id="duelLives"></div>
     <div class="duel-cores">
-      <div class="duel-core red"><span>?? ???</span><div class="mh-track"><div id="duelCore0" class="duel-core-fill"></div></div></div>
-      <div class="duel-core blue"><span>?? ???</span><div class="mh-track"><div id="duelCore1" class="duel-core-fill"></div></div></div>
+      <div class="duel-core red"><span>🔴 红核</span><div class="mh-track"><div id="duelCore0" class="duel-core-fill"></div></div></div>
+      <div class="duel-core blue"><span>🔵 蓝核</span><div class="mh-track"><div id="duelCore1" class="duel-core-fill"></div></div></div>
     </div>
   </div>
-  <!-- ?????? -->
+  <!-- 暂停菜单 -->
   <div id="pauseMenu" class="hidden">
     <div class="pm-panel">
-      <h2>?????</h2>
-      <button id="pauseContinueBtn" class="btn btn-primary">??????</button>
-      <button id="pauseSuicideBtn" class="btn btn-danger">?? ???</button>
-      <button id="pauseLeaveBtn" class="btn">??????</button>
-      <button id="pauseMusicBtn" class="btn">?? ??????</button>
-      <button id="pauseSfxBtn" class="btn">?? ??????</button>
+      <h2>⏸ 暂停</h2>
+      <button id="pauseContinueBtn" class="btn btn-primary">继续游戏</button>
+      <button id="pauseSuicideBtn" class="btn btn-danger">💥 自杀</button>
+      <button id="pauseLeaveBtn" class="btn">离开对局</button>
+      <button id="pauseMusicBtn" class="btn">🎵 音乐：开</button>
+      <button id="pauseSfxBtn" class="btn">🔊 音效：开</button>
     </div>
   </div>
-  <!-- ???????????????/??????????????????????????????????-->
+  <!-- 局内选择机甲（开局/死亡后可换机甲再部署；选择期间不可移动攻击） -->
   <div id="mechSelect" class="hidden">
     <div class="ms-panel">
-      <h2>?????????</h2>
+      <h2>选择出战机甲</h2>
       <div id="msButtons"></div>
-      <div class="ms-wtitle">??????????????????</div>
+      <div class="ms-wtitle">武器模块设置（点击切换）</div>
       <div id="msWeapons"></div>
-      <div id="msCountdown">30 ?????????</div>
-      <button id="msConfirm" class="btn btn-primary">????????</button>
+      <div id="msCountdown">30 秒后自动重生</div>
+      <button id="msConfirm" class="btn btn-primary">✅ 确定重生</button>
     </div>
   </div>
-  <!-- ??? J ?????? -->
-  <div id="suicideBar" class="hidden"><div id="suicideFill"></div><span>??? J ???????/span></div>
-  <!-- ?????? -->
+  <!-- 长按 J 自杀进度 -->
+  <div id="suicideBar" class="hidden"><div id="suicideFill"></div><span>长按 J 自杀中…</span></div>
+  <!-- 受击红闪 -->
   <div id="dmgFlash"></div>
-  <!-- ????????-->
+  <!-- 索敌锁定框 -->
   <div id="lockBox" class="hidden"><span id="lockDist"></span></div>
 
-  <!-- CTF ????????UI -->
+  <!-- CTF 夺旗卡牌赛 UI -->
   <div id="ctfUI" class="hidden">
     <div class="ctf-top">
-      <span class="ctf-red" id="ctfRedScore">?? ??0</span>
-      <span class="ctf-round" id="ctfRoundInfo">??1 ???</span>
-      <span class="ctf-blue" id="ctfBlueScore">?? ??0</span>
+      <span class="ctf-red" id="ctfRedScore">🔴 红 0</span>
+      <span class="ctf-round" id="ctfRoundInfo">第 1 回合</span>
+      <span class="ctf-blue" id="ctfBlueScore">🔵 蓝 0</span>
     </div>
-    <div id="ctfFlagStatus">????????????????</div>
-    <div id="ctfCardInfo">?? ?????????</div>
+    <div id="ctfFlagStatus">🏳️ 敌方旗帜：在基地</div>
+    <div id="ctfCardInfo">🃏 本回合卡：无</div>
   </div>
   <div id="votePanel" class="hidden">
-    <div class="vp-head">?? ????????? <span id="voteCountdown"></span></div>
+    <div class="vp-head">🎴 回合卡牌投票 <span id="voteCountdown"></span></div>
     <div id="voteCards" class="vp-cards"></div>
     <div id="voteStatus" class="vp-status"></div>
   </div>
 </div>
 
-<!-- ???????????? -->
+<!-- 机库页（原大厅） -->
 <div id="lobbyPage" class="page">
   <div class="panel hangar-panel">
-    <h1>???<span>NEON HANGAR</span></h1>
-    <p class="sub">War Robots ????????? ? ??????????????/p>
+    <h1>机库<span>NEON HANGAR</span></h1>
+    <p class="sub">War Robots 风格机甲对战 · 装配战斗模块后出击</p>
     <div class="row hangar-row">
-      <input id="lobbyName" maxlength="16" placeholder="?????????" value="???"/>
-      <button id="battleBtn" class="btn btn-primary">?????</button>
-      <button id="quickJoinBtn" class="btn">?????????/button>
-      <button id="refreshRoomsBtn" class="btn">?? ???</button>
-      <button id="musicBtn" class="btn" title="??????????>?? ???</button>
+      <input id="lobbyName" maxlength="16" placeholder="输入你的名字" value="玩家"/>
+      <button id="battleBtn" class="btn btn-primary">⚔ 战斗</button>
+      <button id="quickJoinBtn" class="btn">⚡ 快速加入</button>
+      <button id="refreshRoomsBtn" class="btn">🔄 刷新</button>
+      <button id="musicBtn" class="btn" title="背景音乐开关">🎵 音乐</button>
     </div>
     <div class="mode-btns" id="modeBtns">
-      <button class="mode-btn active" data-mode="duel">?????</button>
-      <button class="mode-btn" data-mode="ctf">???????</button>
-      <button class="mode-btn" data-mode="zone">?? ???</button>
+      <button class="mode-btn active" data-mode="duel">⚔ 死斗</button>
+      <button class="mode-btn" data-mode="ctf">🏳️ 战旗</button>
+      <button class="mode-btn" data-mode="zone">🚩 占点</button>
     </div>
     <div class="hangar-slots">
       <div class="mech-card" id="mechCard0">
         <div class="mech-preview" id="mechPreview0"></div>
-        <div class="mech-name">?? ???</div>
+        <div class="mech-name">🤖 泰坦</div>
         <div class="weapon-slots" id="weaponSlots0"></div>
       </div>
       <div class="mech-card" id="mechCard1">
         <div class="mech-preview" id="mechPreview1"></div>
-        <div class="mech-name">?? ???</div>
+        <div class="mech-name">🕷 猎蛛</div>
         <div class="weapon-slots" id="weaponSlots1"></div>
       </div>
     </div>
     <div id="roomList" class="room-list"></div>
     <div class="help" id="helpText">
-      <b>???</b>??ASD ??? ? ???????????S:GO ??????? ?????? ? ??????<br/>
-      <b>ESC</b> ???????????????<b>??? J 3 ??/b> ??????<br/>
-      ?? ??????????????? 1 ??-50%?? ??-80%?????? 5%/25%/50%/80%/95% ????? ????????????????????????????
+      <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃<br/>
+      <b>ESC</b> 打开菜单（可自杀）· <b>长按 J 3 秒</b> 也可自杀<br/>
+      💡 腿部损毁会减速（人形 1 腿 -50%、2 腿 -80%；蜘蛛按 5%/25%/50%/80%/95% 递增、6 腿瘫痪），胸部耗尽后核心可能被击穿！
     </div>
-    <div id="connStatus">?????????????/div>
+    <div id="connStatus">正在连接服务器…</div>
   </div>
 </div>
 
-<!-- ?????-->
+<!-- 房间页 -->
 <div id="roomPage" class="page hidden">
   <div class="panel">
     <div class="room-head">
-      <h2 id="roomTitle">??????</h2>
-      <div>?????<b class="room-code" id="roomCode">------</b></div>
-      <button id="copyCodeBtn" class="btn">???</button>
-      <button id="leaveRoomBtn" class="btn btn-danger">??????</button>
+      <h2 id="roomTitle">霓虹混战</h2>
+      <div>房间码 <b class="room-code" id="roomCode">------</b></div>
+      <button id="copyCodeBtn" class="btn">复制</button>
+      <button id="leaveRoomBtn" class="btn btn-danger">离开房间</button>
     </div>
     <div id="roomSettings" class="room-settings hidden">
-      <label>???
+      <label>模式
         <select id="modeSelect">
-          <option value="ffa">?? ??????</option>
-          <option value="zone">?? ??????</option>
-          <option value="ctf">????????????/option>
+          <option value="ffa">🔫 死亡竞赛</option>
+          <option value="zone">🚩 占点模式</option>
+          <option value="ctf">🏳️ 夺旗卡牌赛</option>
         </select>
       </label>
-      <label>???
+      <label>人数
         <select id="maxSelect">
-          <option value="4">4 ??/option>
-          <option value="8">8 ??/option>
-          <option value="16" selected>16 ??/option>
+          <option value="4">4 人</option>
+          <option value="8">8 人</option>
+          <option value="16" selected>16 人</option>
         </select>
       </label>
-      <label>???
+      <label>时长
         <select id="minutesSelect">
-          <option value="3">3 ???</option>
-          <option value="5" selected>5 ???</option>
-          <option value="10">10 ???</option>
+          <option value="3">3 分钟</option>
+          <option value="5" selected>5 分钟</option>
+          <option value="10">10 分钟</option>
         </select>
       </label>
     </div>
     <ul id="roomPlayers" class="room-players"></ul>
     <div class="room-actions">
-      <button id="readyBtn" class="btn">?????</button>
-      <button id="startBtn" class="btn btn-primary hidden">?????????/button>
+      <button id="readyBtn" class="btn">✔ 准备</button>
+      <button id="startBtn" class="btn btn-primary hidden">▶ 开始游戏</button>
     </div>
   </div>
 </div>
 
-<!-- ????????-->
+<!-- 对局结算页 -->
 <div id="gameOverPage" class="page hidden">
   <div class="panel">
-    <h1>??????<span>MATCH OVER</span></h1>
+    <h1>对局结束<span>MATCH OVER</span></h1>
     <table class="stats">
-      <thead><tr><th>#</th><th>???</th><th>???</th><th>???</th><th>???</th></tr></thead>
+      <thead><tr><th>#</th><th>玩家</th><th>击杀</th><th>死亡</th><th>得分</th></tr></thead>
       <tbody id="gameOverStats"></tbody>
     </table>
     <div class="room-actions">
-      <button id="backToRoomBtn" class="btn btn-primary">??????</button>
+      <button id="backToRoomBtn" class="btn btn-primary">返回房间</button>
     </div>
   </div>
 </div>
