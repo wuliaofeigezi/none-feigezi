@@ -5,7 +5,7 @@ import * as THREE from './three.module.min.js';
   'use strict';
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260817 · 相机高度 camHgt = 1.2 · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260818 · 相机 camHgt = 2.8 平视 · 机甲中下方约1/5 · 如加载旧版请强制刷新/清除缓存');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -2180,16 +2180,17 @@ import * as THREE from './three.module.min.js';
       spectateCamera(dt);
       if (selfModel) selfModel.visible = false;
     } else {
-      // 第三人称：相机降位（视角下移），平视时完整机甲落在画面中下方约 1/5 高度
-      const camDist = 6.6, camHgt = 1.2;
+      // 第三人称：相机高 2.8/距 6.6，平视（pitch=0）时视线水平，
+      // 完整机甲（0~1.72m）落在画面中下方、约占屏幕高度 1/5（约 62%~81% 纵向区间）
+      const camDist = 6.6, camHgt = 2.8;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       let camPos = collideCamera(
         px + Math.sin(yaw) * cpc * camDist, py + camHgt, pz + Math.cos(yaw) * cpc * camDist,
         px, py + 1.2, pz
       );
-      // 相机被地形挡住拉近时：轻微抬高越过障碍（保持低视角，不再抬到 5.0）
+      // 相机被地形挡住拉近时：轻微抬高越过障碍（保持目标高度附近）
       if (Math.hypot(camPos.x - px, camPos.z - pz) < 3.0) {
-        camPos.y = py + 1.6;
+        camPos.y = py + 3.4;
         camPos.x = px + Math.sin(yaw) * cpc * 2.0;
         camPos.z = pz + Math.cos(yaw) * cpc * 2.0;
       }
@@ -2199,8 +2200,8 @@ import * as THREE from './three.module.min.js';
         camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
         camShake = Math.max(0, camShake - dt * 10);
       }
-      // 平视（pitch=0）时视线略俯向机甲上躯，机甲完整落在画面中下方约 1/5
-      camera.lookAt(px - Math.sin(yaw) * 8, py + 0.5 + spc * 8, pz - Math.cos(yaw) * 8);
+      // 平视时视线与相机同高（水平）；俯仰绕机甲旋转视线
+      camera.lookAt(px - Math.sin(yaw) * 10, py + camHgt + spc * 10, pz - Math.cos(yaw) * 10);
 
       // ===== 自机机甲模型（第三人称可见） =====
       if (selfModel) {
