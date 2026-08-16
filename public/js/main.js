@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260904 · 平衡调整：激光大幅加强(15→32伤/秒、充能30→20s) 三武器均衡 · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260905 · 死斗小局一条命死亡观战+其他模式复活10秒+人机系统(房主可选/真人替代) · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -195,6 +195,7 @@ import * as THREE from './three.module.min.js';
     roomTitle = $('roomTitle'), roomCode = $('roomCode'), copyCodeBtn = $('copyCodeBtn'),
     leaveRoomBtn = $('leaveRoomBtn'), roomSettings = $('roomSettings'),
     modeSelect = $('modeSelect'), maxSelect = $('maxSelect'), minutesSelect = $('minutesSelect'),
+    botsSelect = $('botsSelect'),
     roomPlayers = $('roomPlayers'), readyBtn = $('readyBtn'), startBtn = $('startBtn'),
     backToRoomBtn = $('backToRoomBtn'), gameOverStats = $('gameOverStats'),
     deathOverlay = $('deathOverlay'), deathText = $('deathText'), respawnText = $('respawnText'),
@@ -591,6 +592,7 @@ import * as THREE from './three.module.min.js';
       modeSelect.value = myRoom.settings.mode;
       maxSelect.value = String(myRoom.settings.maxPlayers);
       minutesSelect.value = String(myRoom.settings.matchMinutes);
+      if (botsSelect) botsSelect.value = String(myRoom.settings.bots || 0);
     }
   }
 
@@ -1581,6 +1583,12 @@ import * as THREE from './three.module.min.js';
       el.classList.add('hidden');
       clearInterval(msCountdownTimer);
       msWeaponEdits = {};
+      return;
+    }
+    // 死斗：本回合已出局（lives<=0）→ 隐藏选择面板，进入观战；不弹选择
+    if (gameMode === 'duel' && m.lives <= 0) {
+      el.classList.add('hidden');
+      clearInterval(msCountdownTimer);
       return;
     }
     const list = (m.mechChoices || []).slice(); // 服务端已过滤死斗中已损毁的机甲
@@ -3474,13 +3482,14 @@ import * as THREE from './three.module.min.js';
     else backToLobby();
   });
   // 房主改设置
-  [modeSelect, maxSelect, minutesSelect].forEach((sel) => {
+  [modeSelect, maxSelect, minutesSelect, botsSelect].forEach((sel) => {
     sel.addEventListener('change', () => {
       if (!myRoom || myRoom.hostId !== socket.id) return;
       socket.emit('room:settings', {
         mode: modeSelect.value,
         maxPlayers: parseInt(maxSelect.value, 10),
         matchMinutes: parseInt(minutesSelect.value, 10),
+        bots: parseInt(botsSelect ? botsSelect.value : '0', 10),
       });
     });
   });

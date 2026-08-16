@@ -24,6 +24,7 @@ class Room {
       mode: (opts && opts.mode === 'zone' || opts && opts.mode === 'ctf' || opts && opts.mode === 'duel') ? opts.mode : 'ffa',
       maxPlayers: clamp(parseInt(opts && opts.maxPlayers, 10) || MAX_PLAYERS, 2, MAX_PLAYERS),
       matchMinutes: clamp(parseInt(opts && opts.matchMinutes, 10) || 5, 1, 30),
+      bots: clamp(parseInt(opts && opts.bots, 10) || 0, 0, 5), // 人机数量（房主开局前可选）
     };
     this.players = new Map();                   // socketId -> LobbyPlayer
     this.game = null;
@@ -112,6 +113,7 @@ class Room {
     if (mp >= this.players.size) this.settings.maxPlayers = mp;
     const mm = clamp(parseInt(d.matchMinutes, 10) || this.settings.matchMinutes, 1, 30);
     this.settings.matchMinutes = mm;
+    this.settings.bots = clamp(parseInt(d.bots, 10) || 0, 0, 5);
     // 设置变更后重置准备状态
     for (const pl of this.players.values()) pl.ready = false;
     this.broadcastUpdate();
@@ -133,6 +135,7 @@ class Room {
       onGameOver: () => this.endGame(),
     });
     this.game.start(seeds);
+    this.game.addBots(this.settings.bots || 0); // 房主选择的人机
     this.io.to(this.id).emit('game:start', {
       mode: this.settings.mode,
       maxPlayers: this.settings.maxPlayers,
@@ -266,8 +269,17 @@ class RoomManager {
           socket.emit('room:joined', { room: room.toJSON(), inGame: true });
           return;
         }
-        // 中途加入：房间未满则直接进对局（新玩家入场）
+        // 中途加入：房间未满则直接进对局（新玩家入场）；房间满但有人机 → 替代人机
         if (room.players.size >= room.settings.maxPlayers) {
+          // 先尝试替代人机（对局中真人加入替代 Bot）
+          const rep = room.game && room.game.replaceBotWithPlayer(socket, {
+            name: d.name, sessionId: d.sessionId, mechs: d.mechs,
+          });
+          if (rep) {
+            socket.join(room.id);
+            socket.emit('room:joined', { room: room.toJSON(), inGame: true });
+            return;
+          }
           return socket.emit('room:error', { code: 'FULL' });
         }
         room.addPlayer(socket, { name: d.name, sessionId: d.sessionId, mechs: d.mechs });

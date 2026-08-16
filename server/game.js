@@ -13,7 +13,7 @@ const {
   MODULE_LEG, MODULE_CHEST, MODULE_CORE, CORE_HIT_CHANCE,
   MECHS, DEFAULT_MECH, WEAPONS,
   mechSpeedMul, normalizeMech, normalizeWeapons,
-  clamp, sanitizeName, toAABB, moveAxis,
+  clamp, sanitizeName, lerpAngle, toAABB, moveAxis,
 } = require('../public/js/neon-shared.js');
 
 // ---------- 仅服务端参数 ----------
@@ -483,10 +483,15 @@ class Game {
     if (!this.active || !p || !p.connected || !data) return;
     const idx = parseInt(data.index, 10);
     if (!Number.isInteger(idx) || idx < 0 || idx >= p.mechs.length) return;
-    if (this.mode === 'duel' && p.usedMechs && p.usedMechs.has(idx)) return; // 已损毁的机甲不可再选
-    if (p.alive) return; // 仅死亡等待复活时可换机甲
+    // 死斗：一小局一条命，本回合死亡即出局观战，不可再选机甲复活（下一回合 startNextDuelRound 全员复活）
+    if (this.mode === 'duel') {
+      if (p.usedMechs && p.usedMechs.has(idx)) return; // 已损毁的机甲不可再选
+      if (!p.alive && p.lives <= 0) return; // 本回合已出局
+      if (p.alive) return;
+    } else if (p.alive) {
+      return; // 仅死亡等待复活时可换机甲
+    }
     p.mechIndex = idx;
-    if (this.mode === 'duel') p.lives = Math.max(0, p.mechs.length - (p.usedMechs ? p.usedMechs.size : 0));
     this.respawn(p); // 直接以所选机甲出生
     this.sendMe(p);
     console.log(`[neon-arena][${this.roomId}] [mech] ${p.name} 选择机甲 ${p.mechIndex}（${p.mechs[idx].type}）`);
@@ -743,11 +748,12 @@ class Game {
         b.deploy = Math.max(0, b.deploy - (TICK_MS / 1000) * 2); // 离开则快速衰减
       }
     }
-    // 3) 全灭判定：一方所有人都用完机甲（出局）→ 另一方赢得回合
+    // 3) 全灭判定：一方所有人都出局（本回合死亡不可复活）→ 另一方赢得回合
     const teamActive = [false, false];
     for (const p of this.players.values()) {
       if (this.mode === 'duel') {
-        if (p.usedMechs.size < p.mechs.length) teamActive[p.team] = true;
+        // 死斗：一小局一条命，死亡即出局观战；回合开始时全员复活
+        if (p.alive && p.connected) teamActive[p.team] = true;
       } else {
         teamActive[p.team] = true;
       }
@@ -792,6 +798,117 @@ class Game {
     }
     this.emit('duel:round', { round: d.round, roundWins: d.roundWins, winnerTeam: null, cause: 'start' });
     console.log(`[neon-arena][${this.roomId}] [duel] 第${d.round}回合开始`);
+  }
+
+  // ---------- 人机（Bot） ----------
+  // 房主开局前可选人机数量；人机自动选择机甲出生，简单 AI 索敌攻击；
+  // 对局中真人加入时替代一个人机（人机席位让出）
+  addBots(count) {
+    if (!Number.isInteger(count) || count <= 0) return;
+    const BOT_NAMES = ['🤖 铁壁', '🤖 游侠', '🤖 收割', '🤖 炮灰', '🤖 幽灵'];
+    const MAX_BOTS = 5;
+    count = Math.min(count, MAX_BOTS);
+    for (let i = 0; i < count; i++) {
+      const id = 'bot_' + (this._botSeq = (this._botSeq || 0) + 1);
+      const mechIdx = i % 3; // 泰坦/猎蛛/守护者轮换
+      const seed = {
+        name: BOT_NAMES[i % BOT_NAMES.length] + (count > 1 ? ' ' + (i + 1) : ''),
+        sessionId: '',
+        mechs: [{ type: ['humanoid', 'spider', 'guardian'][mechIdx], weapons: ['gau12', 'gau12', 'gau12'] }],
+      };
+      const p = this.createPlayer(id, seed, this.players.size);
+      p.isBot = true;
+      p.botBrain = { retargetAt: 0, wanderAt: 0, wanderYaw: Math.random() * Math.PI * 2 };
+      this.players.set(id, p);
+      p.mechIndex = 0;
+      this.respawn(p); // 直接出生
+      console.log(`[neon-arena][${this.roomId}] 🤖 人机加入：${p.name}（${p.mechType}）`);
+    }
+  }
+
+  // Bot AI：每 tick 驱动输入（追击最近敌人、开火、简单躲避/游走）
+  updateBot(p, dt, now) {
+    if (!p.isBot || !p.alive) return;
+    const brain = p.botBrain;
+    // 找最近敌方
+    let best = null, bd = Infinity;
+    for (const q of this.players.values()) {
+      if (q === p || !q.alive || !q.connected) continue;
+      if (isTeamMode(this.mode) && q.team === p.team) continue;
+      const dx = q.pos.x - p.pos.x, dz = q.pos.z - p.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bd) { bd = d2; best = q; }
+    }
+    const input = p.input;
+    if (!best || bd > 70 * 70) {
+      // 无目标：随机游走（周期性换向，避免撞墙卡死）
+      if (now > brain.wanderAt) {
+        brain.wanderAt = now + 2000 + Math.random() * 3000;
+        brain.wanderYaw = Math.random() * Math.PI * 2;
+      }
+      p.yaw = lerpAngle(p.yaw, brain.wanderYaw, 0.1);
+      input.fwd = 1;
+      input.strafe = 0;
+      input.fire = false;
+      input.jump = false;
+      input.shield = false;
+      p.aim = {
+        x: p.pos.x - Math.sin(p.yaw) * 15, y: p.pos.y + 1.2, z: p.pos.z - Math.cos(p.yaw) * 15,
+      };
+      return;
+    }
+    // 有目标：面向目标，保持距离（近战贴脸，远程拉近）
+    const dist = Math.sqrt(bd);
+    const targetYaw = Math.atan2(p.pos.x - best.pos.x, p.pos.z - best.pos.z);
+    p.yaw = lerpAngle(p.yaw, targetYaw, 0.15);
+    // 距离过近后退，过远前进，适中保持并横移（简单走位）
+    const wantDist = 9;
+    if (dist > wantDist + 3) { input.fwd = 1; }
+    else if (dist < wantDist - 3) { input.fwd = -1; }
+    else {
+      input.fwd = 0;
+      input.strafe = Math.sin(now * 0.002 + p.id.length) > 0 ? 1 : -1; // 左右横移
+    }
+    // 对准目标开火（机炮/激光持续压制；巡飞弹有冷却由武器逻辑控制）
+    input.fire = dist < 45;
+    input.jump = p.mechType === 'humanoid' && dist < 6 && Math.random() < 0.02; // 偶尔跳
+    input.shield = false;
+    // 索敌锁定 + 瞄准点指向目标
+    this.onLock(p.id, { targetId: best.id });
+    p.aim = {
+      x: best.pos.x, y: best.pos.y + 0.9, z: best.pos.z,
+    };
+    if (dist < 2.5) input.fire = true;
+  }
+
+  // 真人中途加入：替代一个人机（人机让出席位，继承其队伍/位置）
+  replaceBotWithPlayer(socket, seed) {
+    if (!this.active || !socket) return false;
+    let bot = null;
+    for (const p of this.players.values()) {
+      if (p.isBot) { bot = p; break; }
+    }
+    if (!bot) return false;
+    const botTeam = bot.team;
+    const botPos = { x: bot.pos.x, y: bot.pos.y, z: bot.pos.z };
+    const botYaw = bot.yaw;
+    this.players.delete(bot.id);
+    this.emit('playerLeft', { id: bot.id });
+    // 创建真人玩家，继承人机队伍与位置
+    const p = this.createPlayer(socket.id, seed, botTeam);
+    p.pos = botPos; p.yaw = botYaw;
+    this.players.set(socket.id, p);
+    socket.join(this.roomId);
+    this.bindSocket(socket, p);
+    socket.emit('welcome', {
+      id: p.id, name: p.name, color: p.color, team: p.team,
+      map: MAP, self: this.pubMe(p), resumed: false, mode: this.mode,
+    });
+    this.respawn(p);
+    this.sendMe(p);
+    this.emit('playerJoined', { id: p.id, name: p.name, team: p.team });
+    console.log(`[neon-arena][${this.roomId}] 🧍 ${p.name} 替代人机入场（${p.mechType}）`);
+    return true;
   }
 
   // ---------- tick ----------
@@ -839,6 +956,8 @@ class Game {
         if (now - p.leftAt > RECONNECT_GRACE_MS) this.removePlayer(p.id);
         continue;
       }
+      // Bot AI 驱动输入（真人死亡后也可被替换，不在此处理）
+      if (p.isBot && p.alive) this.updateBot(p, dt, now);
       if (!p.alive) {
         if (p.respawnAt && now >= p.respawnAt) this.respawn(p);
         // 开局选择机甲超时（8s）未选：自动以默认机甲出生
@@ -1338,13 +1457,13 @@ class Game {
       cause,
     });
     if (this.mode === 'duel') {
-      // 死斗：标记该机甲已损毁；仍有剩余机甲则等待复活（可用局内选择换机甲），否则出局观战
+      // 死斗：一小局（本回合）内死亡即出局不可复活，只能观战；下一回合 startNextDuelRound 全员复活
       victim.usedMechs.add(victim.mechIndex);
-      victim.lives = Math.max(0, victim.mechs.length - victim.usedMechs.size);
-      victim.respawnAt = (victim.usedMechs.size < victim.mechs.length) ? now + this.cfg.respawnMs : 0;
+      victim.lives = 0; // 0 → 客户端进入观战模式
+      victim.respawnAt = 0; // 本回合不再复活
       this.emit('duel:lives', { id: victim.id, lives: victim.lives, mechIndex: victim.mechIndex });
     } else {
-      victim.respawnAt = now + this.cfg.respawnMs;
+      victim.respawnAt = now + this.cfg.respawnMs; // 其他模式：10 秒后复活
     }
     this.sendMe(victim);
   }

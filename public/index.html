@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260904"/>
+<link rel="stylesheet" href="css/style.css?v=20260905"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -415,6 +415,7 @@
       <b>操作</b>：WASD 移动 · 点击锁定鼠标（CS:GO 式视角）· 左键射击 · 空格跳跃 · <b>Q 守护者量子罩</b>（升起挡物理伤害，但无法移动）· <b>M 大地图</b><br/>
       <b>ESC</b> 打开菜单（可自杀）· <b>长按 J 3 秒</b> 也可自杀<br/>
       💡 腿部损毁会减速（人形 1 腿 -50%、2 腿 -80%；蜘蛛按 5%/25%/50%/80%/95% 递增、6 腿瘫痪），胸部耗尽后核心可能被击穿！
+      <br/>🤖 房主可在房间设置里加入人机；对局中真人加入会替代人机席位。死斗每小局一条命，死亡即观战，下回合复活。
     </div>
     <div id="connStatus">正在连接服务器…</div>
   </div>
@@ -452,6 +453,16 @@
           <option value="10">10 分钟</option>
         </select>
       </label>
+      <label>人机
+        <select id="botsSelect">
+          <option value="0" selected>无人机</option>
+          <option value="1">1 台</option>
+          <option value="2">2 台</option>
+          <option value="3">3 台</option>
+          <option value="4">4 台</option>
+          <option value="5">5 台</option>
+        </select>
+      </label>
     </div>
     <ul id="roomPlayers" class="room-players"></ul>
     <div class="room-actions">
@@ -477,8 +488,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260904"></script>
-<script src="js/neon-shared.js?v=20260904"></script>
-<script type="module" src="js/main.js?v=20260904"></script>
+<script src="js/socket.io.min.js?v=20260905"></script>
+<script src="js/neon-shared.js?v=20260905"></script>
+<script type="module" src="js/main.js?v=20260905"></script>
 </body>
 </html>

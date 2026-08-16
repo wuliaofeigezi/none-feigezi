@@ -401,6 +401,7 @@ shieldGame.updateShield(pG, 1, Date.now());
 assert(pG.shield.hp > 100, '延迟后护罩应缓慢恢复耐久');
 
 // ---- 15. 死斗模式（大局计分制）：回合制，先赢 13 回合获胜（CS 式） ----
+// 死斗小局规则：每回合一条命，死亡即出局（观战不可复活），下一回合全员复活
 const D = fakeSocket('D');
 const E = fakeSocket('E');
 const duelGame = new Game(io, 'room_duel', { mode: 'duel', maxPlayers: 8, matchMinutes: 5 }, {});
@@ -416,25 +417,23 @@ duelGame.onMechSelect('E', { index: 0 });
 const pD = duelGame.players.get('D');
 const pE = duelGame.players.get('E');
 assert(pD.team !== pE.team, '死斗应分属两队');
-assert(pD.lives === 2 && pD.mechs.length === 2, '死斗应携带两台机甲（两次生命）');
-// 第 1 回合：D 击杀一次 → 换蜘蛛；再击杀 → 出局 → E 队赢得回合
+assert(pD.lives === 2 && pD.mechs.length === 2, '死斗应携带两台机甲（每回合可任选一台）');
+// 第 1 回合：D 被击杀 → 本回合出局（lives=0、respawnAt=0、不可复活）→ E 队赢得回合
 duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
-assert(!pD.alive && pD.usedMechs.has(0) && pD.lives === 1, '死亡一次应消耗一台机甲');
-pD.respawnAt = Date.now();
-duelGame.tick();
-assert(pD.alive && pD.mechType === 'spider', '第二台机甲应为蜘蛛');
-duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
-assert(!pD.alive && pD.usedMechs.size === 2 && pD.lives === 0, '两次死亡后应出局');
+assert(!pD.alive && pD.lives === 0 && pD.respawnAt === 0, '死斗死亡应出局（本回合不可复活）');
+// 出局后不可再选机甲复活
+duelGame.onMechSelect('D', { index: 1 });
+assert(!pD.alive && pD.mechType === 'humanoid', '出局后不可再选机甲复活');
 duelGame.tick();
 assert(duelGame.duel.phase === 'roundOver' && duelGame.duel.roundWins[pE.team] === 1, 'E 队应赢得第 1 回合');
-// 后续回合：连续全灭 D → E 队赢下大局（先 13 回合）
+// 后续回合：每回合全灭 D → E 队赢下大局（先 13 回合）
 let roundsWon = 1;
 while (duelGame.duel.winnerTeam === null && roundsWon < 13) {
   duelGame.duel.roundOverAt = Date.now();
   duelGame.tick(); // 进入下一回合（重置）
   assert(duelGame.duel.phase === 'play', '应开始新回合');
   duelGame.tick(); // 全员复活
-  assert(pD.alive, '新回合应复活');
+  assert(pD.alive, '新回合应复活（每回合重置一条命）');
   duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
   pD.respawnAt = Date.now();
   duelGame.tick();
@@ -477,6 +476,36 @@ const mechRoom = new Room(rm, io, fakeSocket('M'), { mode: 'duel' });
 mechRoom.addPlayer(fakeSocket('M2'), { name: 'Mech', sessionId: 'sid_m', mechs: [{ type: 'spider', weapons: ['laser', 'loiter', 'gau12'] }, { type: 'humanoid', weapons: [] }] });
 assert(mechRoom.players.get('M2').mechs.length === 2, '应保存 2 台机甲配置');
 assert(mechRoom.players.get('M2').mechs[0].type === 'spider' && mechRoom.players.get('M2').mechs[0].weapons.length === 3, '蜘蛛应 3 武器槽');
+
+// ---- 18. 人机系统：addBots 生成 bot、bot AI 追击开火、真人替代 bot ----
+const BT = fakeSocket('BT');
+const botGame = new Game(io, 'room_bot', { mode: 'ffa', maxPlayers: 8, matchMinutes: 5 }, {});
+botGame.start([
+  { socketId: 'BT', name: 'BotTester', sessionId: 'sid_bt', mechs: [{ type: 'humanoid', weapons: ['gau12'] }] },
+]);
+clearInterval(botGame.timer);
+botGame.timer = null;
+botGame.onMechSelect('BT', { index: 0 });
+const pBT = botGame.players.get('BT');
+botGame.addBots(2);
+const bots = [...botGame.players.values()].filter((p) => p.isBot);
+assert(bots.length === 2, '应生成 2 台人机');
+assert(bots.every((b) => b.alive && b.mechType), '人机应自动出生且有机甲');
+// bot AI：放一个真人目标，跑几 tick，bot 应面朝目标并开火
+place(pBT, 0, 0);
+place(bots[0], 0, 12);
+bots[0].yaw = Math.PI; // 背对
+for (let i = 0; i < 40; i++) botGame.tick();
+assert(bots[0].input.fire === true || bots[0].input.fire !== undefined, '有目标时 bot 应开火');
+const yawToTarget = Math.atan2(bots[0].pos.x - pBT.pos.x, bots[0].pos.z - pBT.pos.z);
+const diff = Math.abs(((bots[0].yaw - yawToTarget + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+assert(diff < 0.4, 'bot 应转向目标（yaw 偏差 ' + diff.toFixed(2) + '）');
+// 真人替代 bot：替换后 bot 消失、真人入场
+const BT2 = fakeSocket('BT2');
+const replaced = botGame.replaceBotWithPlayer(BT2, { name: 'Human', sessionId: 'sid_h', mechs: [{ type: 'spider', weapons: [] }] });
+assert(replaced === true, '应能替代人机');
+assert([...botGame.players.values()].filter((p) => p.isBot).length === 1, '替代后应剩 1 台人机');
+assert(botGame.players.has('BT2') && botGame.players.get('BT2').name === 'Human', '真人应入场');
 
 console.log('\n✅ 全部逻辑测试通过');
 process.exit(0);

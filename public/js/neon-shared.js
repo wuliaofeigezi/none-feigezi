@@ -28,7 +28,7 @@
   const PROJ_R = 0.3;
   const PROJ_LIFE = 1.5;
   const DMG = 20;
-  const RESPAWN_MS = 30000;       // 重生倒计时 30 秒
+  const RESPAWN_MS = 10000;        // 重生倒计时 10 秒（死斗除外：一小局内死亡不可复活，下一回合全员复活）
   const MAX_PLAYERS = 16;
   const PICKUP_RANGE = 1.1;
   const PICKUP_RESPAWN_MS = 8000;
