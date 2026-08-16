@@ -46,7 +46,8 @@ import * as THREE from './three.module.min.js';
     pauseSuicideBtn = $('pauseSuicideBtn'), pauseLeaveBtn = $('pauseLeaveBtn'),
     suicideBar = $('suicideBar'), suicideFill = $('suicideFill'),
     lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash'),
-    mechSelect = $('mechSelect'), msButtons = $('msButtons');
+    mechSelect = $('mechSelect'), msButtons = $('msButtons'),
+    msWeapons = $('msWeapons'), msCountdown = $('msCountdown'), msConfirm = $('msConfirm');
 
   // ===== 常量（单一事实来源：public/js/neon-shared.js，禁止在此重复定义） =====
   const NS = window.NeonShared;
@@ -914,25 +915,85 @@ import * as THREE from './three.module.min.js';
   }
 
   // ---------- 局内选择机甲（开局/死亡后可换机甲再部署；选择期间不可移动攻击） ----------
+  let msSelected = -1;           // 当前选中机甲 index
+  let mechChoicesCache = [];     // 最近一次 me 事件携带的机甲选择列表
+  let msWeaponEdits = {};        // 武器模块编辑缓存：index -> weapons[]
+  let msCountdownTimer = null;
+  let msRespawnEndsAt = 0;
+
   function mechSelecting() {
     return !!(mechSelect && !mechSelect.classList.contains('hidden'));
   }
+
+  // 30s 重生倒计时（选择面板内显示；倒计时结束自动确认当前选择）
+  function startMsCountdown(respawnIn) {
+    msRespawnEndsAt = performance.now() + (respawnIn || 0);
+    clearInterval(msCountdownTimer);
+    msCountdownTimer = setInterval(() => {
+      const left = (msRespawnEndsAt - performance.now()) / 1000;
+      if (msCountdown) {
+        msCountdown.textContent = respawnIn > 0
+          ? (left > 0 ? Math.ceil(left) + ' 秒后自动重生' : '即将自动重生…')
+          : '选择机甲出击';
+      }
+      if (respawnIn > 0 && left <= 0 && msSelected >= 0) {
+        socket.emit('mech:select', { index: msSelected });
+        if (mechSelect) mechSelect.classList.add('hidden');
+        clearInterval(msCountdownTimer);
+      }
+    }, 200);
+  }
+
+  function renderMsWeapons() {
+    const el = msWeapons;
+    if (!el) return;
+    const choice = mechChoicesCache.find((c) => c.index === msSelected);
+    if (!choice) { el.innerHTML = ''; return; }
+    const weapons = msWeaponEdits[choice.index] || choice.weapons;
+    el.innerHTML = weapons.map((w, i) =>
+      '<button class="ms-weapon w-' + w + '" data-i="' + i + '">' +
+      '<span class="ws-name">' + WEAPON_LABEL[w][0] + '</span>' +
+      '<span class="ws-type">' + WEAPON_LABEL[w][1] + '</span></button>').join('');
+    el.querySelectorAll('.ms-weapon').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = parseInt(btn.dataset.i, 10);
+        const list = (msWeaponEdits[choice.index] || choice.weapons.slice());
+        list[i] = WEAPON_ORDER[(WEAPON_ORDER.indexOf(list[i]) + 1) % WEAPON_ORDER.length];
+        msWeaponEdits[choice.index] = list;
+        renderMsWeapons();
+        socket.emit('mech:config', { index: choice.index, weapons: list }); // 立即保存到服务器
+        beep(660, 0.05, 'square', 0.04); // 点击反馈
+      });
+    });
+  }
+
   function updateMechSelect(m) {
     const el = mechSelect, btns = msButtons;
     if (!el || !btns) return;
-    if (m.alive) { el.classList.add('hidden'); return; }
+    if (m.alive) {
+      el.classList.add('hidden');
+      clearInterval(msCountdownTimer);
+      msWeaponEdits = {};
+      return;
+    }
     const list = (m.mechChoices || []).slice(); // 服务端已过滤死斗中已损毁的机甲
-    if (!list.length) { el.classList.add('hidden'); return; }
+    if (!list.length) { el.classList.add('hidden'); clearInterval(msCountdownTimer); return; }
+    mechChoicesCache = list;
+    if (msSelected < 0 || !list.some((c) => c.index === msSelected)) msSelected = list[0].index;
     el.classList.remove('hidden');
     btns.innerHTML = list.map((c) =>
-      '<button class="btn ms-btn" data-i="' + c.index + '">' +
+      '<button class="ms-btn' + (c.index === msSelected ? ' selected' : '') + '" data-i="' + c.index + '">' +
       (c.type === 'spider' ? '🕷 蜘蛛机器人' : '🤖 人形战斗机器人') + '</button>').join('');
     btns.querySelectorAll('.ms-btn').forEach((b) => {
       b.addEventListener('click', () => {
-        socket.emit('mech:select', { index: parseInt(b.dataset.i, 10) });
-        el.classList.add('hidden');
+        msSelected = parseInt(b.dataset.i, 10);
+        btns.querySelectorAll('.ms-btn').forEach((x) => x.classList.toggle('selected', x === b));
+        renderMsWeapons();
+        beep(700, 0.05, 'triangle', 0.05); // 点击反馈
       });
     });
+    renderMsWeapons();
+    startMsCountdown(m.respawnIn || 0);
   }
 
   // ---------- 武器视觉（曳光/激光束/巡飞弹/爆炸） ----------
@@ -1011,7 +1072,7 @@ import * as THREE from './three.module.min.js';
     return o;
   }
   function updateLoiterMeshes(projectiles) {
-    const list = projectiles || [];
+    const list = (projectiles || []).filter((p) => p.kind !== 'bullet'); // 仅巡飞弹
     for (let i = 0; i < loiterMeshes.length; i++) {
       if (i >= list.length) { loiterMeshes[i].active = false; loiterMeshes[i].mesh.visible = false; loiterMeshes[i].trail.visible = false; continue; }
       const o = getLoiterMesh();
@@ -1028,6 +1089,28 @@ import * as THREE from './three.module.min.js';
       }
     }
     for (let i = list.length; i < loiterMeshes.length; i++) { loiterMeshes[i].active = false; loiterMeshes[i].mesh.visible = false; loiterMeshes[i].trail.visible = false; }
+  }
+
+  // 机炮子弹（小型弹体，不穿墙）
+  let bulletPool = [];
+  function getBulletMesh() {
+    for (const m of bulletPool) if (!m.visible) { m.visible = true; return m; }
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07, 6, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a8 })
+    );
+    mesh.visible = false;
+    scene.add(mesh);
+    bulletPool.push(mesh);
+    return mesh;
+  }
+  function updateBullets(projectiles) {
+    const list = (projectiles || []).filter((p) => p.kind === 'bullet');
+    for (let i = 0; i < list.length; i++) {
+      const m = getBulletMesh();
+      m.position.set(list[i].x, list[i].y, list[i].z);
+    }
+    for (let i = list.length; i < bulletPool.length; i++) bulletPool[i].visible = false;
   }
   function getExplosion() {
     for (const e of explosionPool) if (!e.active) { e.active = true; e.mesh.visible = true; return e; }
@@ -1483,11 +1566,15 @@ import * as THREE from './three.module.min.js';
     updateLeaderboard(payload.players);
     // 击杀播报（用服务器时间戳过滤，内容未变不重渲染，避免闪烁）
     renderKillfeed(payload.killfeed, payload.t);
-    // 武器视觉：机炮曳光 / 激光束 / 巡飞弹轨迹 / 爆炸
+    // 武器视觉：机炮子弹 / 激光束 / 巡飞弹轨迹 / 爆炸 / 弹着火花
     updateTracers(payload.shots, TICK_MS / 1000);
+    updateBullets(payload.projectiles);
     updateBeams(payload.beams);
     updateLoiterMeshes(payload.projectiles);
     updateExplosions(payload.explosions, TICK_MS / 1000);
+    if (payload.impacts) {
+      for (const im of payload.impacts) spawnSparks(im.x, im.y, im.z, 3);
+    }
     // 死斗 HUD（基地核心部署进度 / 剩余机甲）
     if (gameMode === 'duel' && payload.duel) updateDuelHud(payload.duel);
     // 命中 / 受击反馈
@@ -2061,7 +2148,7 @@ import * as THREE from './three.module.min.js';
       if (selfModel) selfModel.visible = false;
     } else {
       // 和平精英式第三人称：相机高且远、看向玩家前上方，机甲位于画面下部中央
-      const camDist = 7.0, camHgt = 4.4;
+      const camDist = 7.0, camHgt = 2.2;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       let camPos = collideCamera(
         px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.45, pz + Math.cos(yaw) * cpc * camDist,
@@ -2069,7 +2156,7 @@ import * as THREE from './three.module.min.js';
       );
       // 相机被地形挡住拉近时：抬高越过障碍，避免机甲糊脸遮挡
       if (Math.hypot(camPos.x - px, camPos.z - pz) < 3.2) {
-        camPos.y = py + 7.0;
+        camPos.y = py + 5.0;
         camPos.x = px + Math.sin(yaw) * cpc * 2.0;
         camPos.z = pz + Math.cos(yaw) * cpc * 2.0;
       }
@@ -2356,6 +2443,15 @@ import * as THREE from './three.module.min.js';
   if (pauseLeaveBtn) pauseLeaveBtn.addEventListener('click', () => {
     if (socket) socket.emit('room:leave');
     setPause(false);
+  });
+  // 机甲选择：确定重生按钮
+  if (msConfirm) msConfirm.addEventListener('click', () => {
+    if (msSelected >= 0 && socket) {
+      socket.emit('mech:select', { index: msSelected });
+      beep(880, 0.08, 'triangle', 0.07); // 点击反馈
+    }
+    if (mechSelect) mechSelect.classList.add('hidden');
+    clearInterval(msCountdownTimer);
   });
 
   // 输入上报（死亡/投票/暂停期间持续上报零输入；复活瞬间输入立即生效）

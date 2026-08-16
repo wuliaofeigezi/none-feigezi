@@ -107,16 +107,16 @@ input(A, { fwd: 1 });
 for (let i = 0; i < 30; i++) game.tick();
 assert(pA.pos.z < -6, '应能从箱顶走过并越过边缘（z 应 < -6）');
 
-// ---- 7. 机炮命中模块（默认 Gau12）：平射打胸部、压低枪口打腿部 ----
+// ---- 7. 机炮命中模块（弹体飞行不穿墙）：平射打胸部、压低枪口打腿部 ----
 place(pA, 0, 12);
 place(pB, 0, 16);
-input(A, { fire: true, yaw: Math.PI, pitch: 0 }); // 朝 +z 平射
+input(A, { fire: true, yaw: Math.PI, pitch: 0 }); // 朝 +z 平射（4 挺机炮齐射）
 const chest0 = pB.mech.chest;
-game.tick();
+for (let i = 0; i < 40; i++) game.tick(); // 持续射击等弹体命中
 assert(pB.mech.chest < chest0, '机炮平射应命中胸部模块');
 const legs0 = pB.mech.legs.slice();
 input(A, { fire: true, yaw: Math.PI, pitch: -0.2 }); // 压低枪口
-for (let i = 0; i < 5; i++) game.tick();
+for (let i = 0; i < 40; i++) game.tick();
 assert(pB.mech.legs.some((h, i) => h < legs0[i]), '压低枪口应命中腿部模块');
 input(A, { fire: false });
 
@@ -219,14 +219,16 @@ for (let i = 0; i < 40; i++) {
 console.log('蜘蛛爬墙后 y:', pB.pos.y.toFixed(2), 'climbing:', pB.climbing);
 assert(climbed, '蜘蛛应能爬墙上升');
 
-// ---- 14.6 武器索敌：锁定后即使不瞄向目标也能精准命中 ----
+// ---- 14.6 武器索敌：锁定后即使不瞄向目标，弹体强导也能命中 ----
 setWeapon(pA, 'gau12');
 game.onLock('A', { targetId: 'B' }); // 客户端上报锁定 B
 place(pA, 0, 12);
 place(pB, 0, 16);
 input(A, { fire: true, yaw: 0, pitch: 0 }); // 瞄向 -z（完全背对 B）
 const lockSum0 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
-game.tick();
+game.tick(); // 发射（弹体强导转向 B）
+let gL = 0;
+while (game.projectiles.length > 0 && gL++ < 120) game.tick();
 input(A, { fire: false });
 game.onLock('A', { targetId: null }); // 解除锁定
 const lockSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;

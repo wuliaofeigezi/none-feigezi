@@ -185,12 +185,31 @@
   #suicideFill{height:6px;width:0;background:#ff5c7a;border-radius:3px;margin-bottom:6px;transition:width .1s linear;}
 
   /* ===== 局内选择机甲 ===== */
-  #mechSelect{position:fixed;inset:0;z-index:88;background:rgba(5,8,20,.65);display:flex;align-items:center;justify-content:center;}
-  .ms-panel{background:rgba(14,18,44,.96);border:1px solid #ffb84a;border-radius:14px;padding:22px 26px;text-align:center;}
+  #mechSelect{position:fixed;inset:0;z-index:88;background:rgba(5,8,20,.65);display:flex;align-items:center;justify-content:center;pointer-events:auto;}
+  .ms-panel{background:rgba(14,18,44,.97);border:1px solid #ffb84a;border-radius:14px;padding:22px 26px;text-align:center;pointer-events:auto;}
   .ms-panel h2{margin:0 0 12px;color:#ffe9a8;}
-  #msButtons{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;}
-  .ms-btn{font-size:15px;padding:12px 20px;border-color:#4f6bff;}
+  #msButtons{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-bottom:10px;}
+  .ms-btn{font-size:15px;padding:12px 20px;border-color:#4f6bff;cursor:pointer;transition:transform .08s,background .15s;}
   .ms-btn:hover{border-color:#ffb84a;}
+  .ms-btn:active{transform:scale(.94);}
+  .ms-btn.selected{border-color:#ffb84a;background:#3a2c10;color:#ffe9a8;box-shadow:0 0 12px rgba(255,184,74,.4);}
+  .ms-wtitle{font-size:12px;color:#8fa3d8;margin:4px 0 6px;}
+  #msWeapons{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:10px;}
+  .ms-weapon{flex:1;min-width:82px;padding:7px 8px;border-radius:6px;border:2px solid #33408f;background:#101432;color:#cfe0ff;font-size:11px;cursor:pointer;transition:transform .08s,background .15s;}
+  .ms-weapon:hover{border-color:#4f6bff;}
+  .ms-weapon:active{transform:scale(.94);}
+  .ms-weapon .ws-name{display:block;font-weight:700;}
+  .ms-weapon .ws-type{display:block;font-size:9px;color:#8fa3d8;}
+  .ms-weapon.w-gau12 .ws-name{color:#7df9ff;}
+  .ms-weapon.w-laser .ws-name{color:#ff9db8;}
+  .ms-weapon.w-loiter .ws-name{color:#ffd98a;}
+  #msCountdown{margin:6px 0 12px;font-size:13px;color:#ffe9a8;font-weight:700;}
+  #msConfirm{font-size:15px;padding:10px 30px;cursor:pointer;transition:transform .08s,filter .15s;}
+  #msConfirm:active{transform:scale(.95);}
+
+  /* ===== 暂停菜单（修复点击无反应） ===== */
+  #pauseMenu{position:fixed;inset:0;z-index:90;background:rgba(5,8,20,.7);display:flex;align-items:center;justify-content:center;pointer-events:auto;}
+  .pm-panel{background:rgba(14,18,44,.96);border:1px solid #4f6bff;border-radius:14px;padding:24px 30px;display:flex;flex-direction:column;gap:10px;min-width:220px;pointer-events:auto;}
 </style>
 </head>
 <body>
@@ -255,11 +274,15 @@
       <button id="pauseLeaveBtn" class="btn">离开对局</button>
     </div>
   </div>
-  <!-- 局内选择机甲（死亡后可换机甲再部署） -->
+  <!-- 局内选择机甲（开局/死亡后可换机甲再部署；选择期间不可移动攻击） -->
   <div id="mechSelect" class="hidden">
     <div class="ms-panel">
       <h2>选择出战机甲</h2>
       <div id="msButtons"></div>
+      <div class="ms-wtitle">武器模块设置（点击切换）</div>
+      <div id="msWeapons"></div>
+      <div id="msCountdown">30 秒后自动重生</div>
+      <button id="msConfirm" class="btn btn-primary">✅ 确定重生</button>
     </div>
   </div>
   <!-- 长按 J 自杀进度 -->

@@ -28,7 +28,7 @@
   const PROJ_R = 0.3;
   const PROJ_LIFE = 1.5;
   const DMG = 20;
-  const RESPAWN_MS = 3000;
+  const RESPAWN_MS = 30000;       // 重生倒计时 30 秒
   const MAX_PLAYERS = 16;
   const PICKUP_RANGE = 1.1;
   const PICKUP_RESPAWN_MS = 8000;

@@ -119,6 +119,7 @@ class Game {
     this.shots = [];         // 机炮曳光（本 tick 内累积，广播后清空）
     this.beams = [];         // 激光束（本 tick）
     this.explosions = [];    // 爆炸（本 tick）
+    this.impacts = [];       // 弹着点（子弹撞墙/命中，本 tick）：{x,y,z}
     this.hits = [];          // 命中反馈（本 tick）：{shooterId, victimId, part, dmg}
     this.killfeed = [];
     this.pickups = MAP.pickups.map((p, i) => ({
@@ -228,6 +229,7 @@ class Game {
       socket.removeListener('suicide', socket._naGame.suicide);
       socket.removeListener('lock', socket._naGame.lock);
       socket.removeListener('mech:select', socket._naGame.mechSelect);
+      socket.removeListener('mech:config', socket._naGame.mechConfig);
       socket.removeListener('disconnect', socket._naGame.disconnect);
     }
     const h = {
@@ -237,6 +239,7 @@ class Game {
       suicide: () => this.onSuicide(p.id),
       lock: (d) => this.onLock(p.id, d),
       mechSelect: (d) => this.onMechSelect(p.id, d),
+      mechConfig: (d) => this.onMechConfig(p.id, d),
       disconnect: () => this.onLeave(p.id),
     };
     socket._naGame = h;
@@ -246,6 +249,7 @@ class Game {
     socket.on('suicide', h.suicide);
     socket.on('lock', h.lock);
     socket.on('mech:select', h.mechSelect);
+    socket.on('mech:config', h.mechConfig);
     socket.on('disconnect', h.disconnect);
   }
 
@@ -363,11 +367,14 @@ class Game {
   }
 
   pickSpawn(team) {
-    let list = MAP.spawns.slice();
-    // CTF / 死斗：按队伍出生在己方一侧
+    let list;
+    // CTF / 死斗：使用双方小队专属重生点
     if (isTeamMode(this.mode) && (team === 0 || team === 1)) {
-      list = list.filter((s) => (team === 0 ? s.x < 0 : s.x > 0));
+      list = MAP.teamSpawns.filter((s) => s.team === team).map((s) => ({ x: s.x, z: s.z }));
+    } else {
+      list = MAP.spawns.slice();
     }
+    if (!list.length) list = MAP.spawns.slice();
     for (let i = list.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [list[i], list[j]] = [list[j], list[i]];
@@ -435,6 +442,17 @@ class Game {
     this.respawn(p); // 直接以所选机甲出生
     this.sendMe(p);
     console.log(`[neon-arena][${this.roomId}] [mech] ${p.name} 选择机甲 ${p.mechIndex}（${p.mechs[idx].type}）`);
+  }
+
+  // 局内武器模块配置（机甲选择面板中调整武器，下次部署生效）
+  onMechConfig(playerId, data) {
+    const p = this.players.get(playerId);
+    if (!this.active || !p || !p.connected || !data) return;
+    const idx = parseInt(data.index, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= p.mechs.length) return;
+    const cfg = MECHS[p.mechs[idx].type];
+    p.mechs[idx].weapons = normalizeWeapons(data.weapons, cfg.mounts);
+    this.sendMe(p);
   }
 
   // 返回当前有效锁定目标（或 null）
@@ -665,6 +683,7 @@ class Game {
     this.shots = [];
     this.beams = [];
     this.explosions = [];
+    this.impacts = [];
     this.hits = [];
     // 全员退出/断线超时 → 直接结束对局，避免空房间泄漏
     if (this.players.size === 0) { this.endGame(); return; }
@@ -771,7 +790,7 @@ class Game {
     return n;
   }
 
-  // Gau12 破坏者：720 发/分，命中一发 1 伤害，不可边打边装填；索敌锁定后精准命中锁定目标
+  // Gau12 破坏者：720 发/分，每发 1 伤害，弹体飞行（不穿墙），索敌锁定小幅强导
   updateGau12(p, ws, dt, now) {
     const w = WEAPONS.gau12;
     if (ws.reloading) {
@@ -785,27 +804,22 @@ class Game {
       ws.fireCd = 60 / w.rpm / rpmMul;
       const origin = this.muzzle(p);
       const locked = this.validLock(p);
-      let hit = null;
+      let dx, dy, dz;
       if (locked) {
-        // 索敌锁定：弹道精准指向锁定目标（无视当前瞄向）
-        const lm = this.lockedModule(locked);
-        hit = {
-          point: { x: locked.pos.x, y: locked.pos.y + 0.9, z: locked.pos.z },
-          player: locked, part: lm.part, legIndex: lm.legIndex,
-        };
+        // 索敌锁定：弹道直接指向锁定目标（即使玩家瞄向别处）
+        const tx = locked.pos.x - origin.x, ty = (locked.pos.y + 0.9) - origin.y, tz = locked.pos.z - origin.z;
+        const tl = Math.hypot(tx, ty, tz) || 1;
+        dx = tx / tl; dy = ty / tl; dz = tz / tl;
       } else {
         const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
-        const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
-        hit = this.rayHit(origin, dir, 60, p);
+        dx = -Math.sin(p.yaw) * cp; dy = sp; dz = -Math.cos(p.yaw) * cp;
       }
-      if (hit.player) {
-        this.damageModule(hit.player, hit.part, w.dmg * (this.cfg.weaponDmgMul || 1), p.id, now, hit.legIndex);
-      }
-      this.shots.push({
-        owner: p.id,
-        x1: origin.x, y1: origin.y, z1: origin.z,
-        x2: hit.point.x, y2: hit.point.y, z2: hit.point.z,
-        hit: !!hit.player,
+      this.projectiles.push({
+        kind: 'bullet', owner: p.id,
+        x: origin.x, y: origin.y, z: origin.z,
+        dx, dy, dz,
+        speed: 70, life: 1.1,
+        lockedId: locked ? locked.id : null, // 飞行中温和修正
       });
       ws.ammo--;
       if (ws.ammo <= 0) { ws.reloading = true; ws.reloadEndsAt = now + w.reloadMs; }
@@ -915,30 +929,89 @@ class Game {
   updateProjectiles(dt, now) {
     const next = [];
     for (const pr of this.projectiles) {
-      if (pr.kind !== 'loiter') continue;
-      pr.t += dt;
-      // 弹道追踪：锁定目标存活则持续修正落点（小幅强导）
-      if (pr.lockedId) {
-        const tgt = this.players.get(pr.lockedId);
-        if (tgt && tgt.alive && tgt.connected) {
-          const kk = Math.min(1, pr.t / pr.dur);
-          const blend = 1 - kk; // 前期修正强，末端收敛
-          pr.tx += (tgt.pos.x - pr.tx) * blend * 0.35;
-          pr.tz += (tgt.pos.z - pr.tz) * blend * 0.35;
-        } else {
-          pr.lockedId = null;
+      if (pr.kind === 'loiter') {
+        pr.t += dt;
+        // 弹道追踪：锁定目标存活则持续修正落点（小幅强导）
+        if (pr.lockedId) {
+          const tgt = this.players.get(pr.lockedId);
+          if (tgt && tgt.alive && tgt.connected) {
+            const kk = Math.min(1, pr.t / pr.dur);
+            const blend = 1 - kk; // 前期修正强，末端收敛
+            pr.tx += (tgt.pos.x - pr.tx) * blend * 0.35;
+            pr.tz += (tgt.pos.z - pr.tz) * blend * 0.35;
+          } else {
+            pr.lockedId = null;
+          }
         }
-      }
-      const k = Math.min(1, pr.t / pr.dur);
-      pr.x = pr.x0 + (pr.tx - pr.x0) * k;
-      pr.z = pr.z0 + (pr.tz - pr.z0) * k;
-      pr.y = pr.y0 + pr.arcH * 4 * k * (1 - k); // 抛物线弧线，越过高地形
-      if (k >= 1) {
-        this.explodeLoiter(pr, now);
-        this.explosions.push({ x: pr.x, y: pr.y, z: pr.z });
+        const k = Math.min(1, pr.t / pr.dur);
+        pr.x = pr.x0 + (pr.tx - pr.x0) * k;
+        pr.z = pr.z0 + (pr.tz - pr.z0) * k;
+        pr.y = pr.y0 + pr.arcH * 4 * k * (1 - k); // 抛物线弧线，越过高地形
+        if (k >= 1) {
+          this.explodeLoiter(pr, now);
+          this.explosions.push({ x: pr.x, y: pr.y, z: pr.z });
+          continue;
+        }
+        next.push(pr);
         continue;
       }
-      next.push(pr);
+      if (pr.kind === 'bullet') {
+        pr.life -= dt;
+        if (pr.life <= 0) continue;
+        const x0 = pr.x, y0 = pr.y, z0 = pr.z;
+        // 索敌修正：温和转向锁定目标（初始已指向目标，仅追踪移动）
+        if (pr.lockedId) {
+          const tgt = this.players.get(pr.lockedId);
+          if (tgt && tgt.alive && tgt.connected) {
+            const tx = tgt.pos.x - pr.x, ty = tgt.pos.y + 0.9 - pr.y, tz = tgt.pos.z - pr.z;
+            const tl = Math.hypot(tx, ty, tz) || 1;
+            const steer = 0.15;
+            pr.dx += (tx / tl - pr.dx) * steer;
+            pr.dy += (ty / tl - pr.dy) * steer;
+            pr.dz += (tz / tl - pr.dz) * steer;
+            const dl = Math.hypot(pr.dx, pr.dy, pr.dz) || 1;
+            pr.dx /= dl; pr.dy /= dl; pr.dz /= dl;
+          } else {
+            pr.lockedId = null;
+          }
+        }
+        pr.x += pr.dx * pr.speed * dt;
+        pr.y += pr.dy * pr.speed * dt;
+        pr.z += pr.dz * pr.speed * dt;
+        // 分段检测：撞墙消失（子弹不穿墙）/ 命中玩家模块
+        const seg = Math.hypot(pr.x - x0, pr.y - y0, pr.z - z0);
+        const steps = Math.max(1, Math.ceil(seg / 0.25));
+        let dead = false;
+        for (let i = 1; i <= steps; i++) {
+          const f = i / steps;
+          const x = x0 + (pr.x - x0) * f;
+          const y = y0 + (pr.y - y0) * f;
+          const z = z0 + (pr.z - z0) * f;
+          if (this.hitColliderAt(x, y, z)) {
+            if (this.impacts.length < 40) this.impacts.push({ x, y, z });
+            dead = true;
+            break;
+          }
+          for (const p of this.players.values()) {
+            if (!p.alive || !p.connected || p.id === pr.owner) continue;
+            const owner = this.players.get(pr.owner);
+            if (owner && isTeamMode(this.mode) && p.team === owner.team) continue;
+            const dx = x - p.pos.x, dz = z - p.pos.z;
+            if (dx * dx + dz * dz > (PLAYER_R + 0.12) * (PLAYER_R + 0.12)) continue;
+            const relY = y - p.pos.y;
+            if (relY < -0.1 || relY > MECHS[p.mechType].chestHeight) continue;
+            const part = relY <= MECHS[p.mechType].legHeight ? MODULE_LEG : MODULE_CHEST;
+            const legIdx = part === MODULE_LEG ? this.randomAliveLeg(p) : null;
+            this.damageModule(p, part, WEAPONS.gau12.dmg * (this.cfg.weaponDmgMul || 1), pr.owner, now, legIdx);
+            if (this.impacts.length < 40) this.impacts.push({ x, y, z });
+            dead = true;
+            break;
+          }
+          if (dead) break;
+        }
+        if (!dead) next.push(pr);
+        continue;
+      }
     }
     this.projectiles = next;
   }
@@ -1270,7 +1343,7 @@ class Game {
       weapons: this.weaponStateToJSON(p, now),
       lives: this.mode === 'duel' ? p.lives : null,
       mechIndex: this.mode === 'duel' ? p.mechIndex : null,
-      mechChoices: p.mechs.map((m, i) => ({ type: m.type, index: i }))
+      mechChoices: p.mechs.map((m, i) => ({ type: m.type, index: i, weapons: m.weapons.slice() }))
         .filter((c) => !(this.mode === 'duel' && p.usedMechs && p.usedMechs.has(c.index))),
       score: Math.floor(p.score), kills: p.kills, deaths: p.deaths,
       alive: p.alive, respawnIn: Math.max(0, p.respawnAt - now),
@@ -1337,7 +1410,7 @@ class Game {
       t: now, mode: this.mode,
       zone: { x: this.zone.x, z: this.zone.z, y: this.zone.y, r: ZONE_R, nextMoveAt: this.zone.nextMoveAt },
       players, projectiles: projs, pickups, killfeed: this.killfeed, ctf, duel,
-      shots: this.shots, beams: this.beams, explosions: this.explosions, hits: this.hits,
+      shots: this.shots, beams: this.beams, explosions: this.explosions, impacts: this.impacts, hits: this.hits,
     });
   }
 }
