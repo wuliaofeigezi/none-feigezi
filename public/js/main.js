@@ -2591,6 +2591,8 @@ import * as THREE from './three.module.min.js';
   // ---------- 大厅 / 房间按钮 ----------
   lobbyName.addEventListener('input', () => {
     myName = (lobbyName.value || '玩家').trim().slice(0, 16);
+    // 即时保存，下次登录自动恢复
+    try { localStorage.setItem('neon_arena_name', myName); } catch (e) { /* ignore */ }
   });
   quickJoinBtn.addEventListener('click', () => {
     myName = (lobbyName.value || '玩家').trim().slice(0, 16);
@@ -2738,6 +2740,14 @@ import * as THREE from './three.module.min.js';
       }
     }
     myName = (lobbyName.value || '玩家').trim().slice(0, 16);
+    // 恢复上次保存的名字
+    try {
+      const saved = localStorage.getItem('neon_arena_name');
+      if (saved && typeof saved === 'string' && saved.trim()) {
+        myName = saved.trim().slice(0, 16);
+        if (lobbyName) lobbyName.value = myName;
+      }
+    } catch (e) { /* ignore */ }
     const host = location.hostname || 'localhost';
     const port = location.port ? ':' + location.port : '';
     connStatus.textContent = '正在连接 ' + host + port + ' …';
