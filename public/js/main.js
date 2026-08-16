@@ -2177,8 +2177,8 @@ import * as THREE from './three.module.min.js';
       spectateCamera(dt);
       if (selfModel) selfModel.visible = false;
     } else {
-      // 第三人称：水平平视时完整机甲位于画面中下方、约占屏幕高度 1/5
-      const camDist = 6.2, camHgt = 2.4;
+      // 第三人称：相机降位（视角下移），平视时完整机甲落在画面中下方约 1/5 高度
+      const camDist = 6.6, camHgt = 1.9;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       let camPos = collideCamera(
         px + Math.sin(yaw) * cpc * camDist, py + camHgt, pz + Math.cos(yaw) * cpc * camDist,
@@ -2196,8 +2196,8 @@ import * as THREE from './three.module.min.js';
         camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
         camShake = Math.max(0, camShake - dt * 10);
       }
-      // 平视时相机视线水平（机甲完整落在画面中下方 1/5）；俯仰绕机甲旋转
-      camera.lookAt(px - Math.sin(yaw) * 8, py + camHgt + spc * 8, pz - Math.cos(yaw) * 8);
+      // 平视（pitch=0）时视线略俯向机甲上躯，机甲完整落在画面中下方约 1/5
+      camera.lookAt(px - Math.sin(yaw) * 8, py + 0.5 + spc * 8, pz - Math.cos(yaw) * 8);
 
       // ===== 自机机甲模型（第三人称可见） =====
       if (selfModel) {
