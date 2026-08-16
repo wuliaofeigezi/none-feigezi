@@ -432,14 +432,19 @@ duelGame.onMechSelect('D', { index: 1 });
 assert(!pD.alive && pD.mechType === 'humanoid', '出局后不可再选机甲复活');
 duelGame.tick();
 assert(duelGame.duel.phase === 'roundOver' && duelGame.duel.roundWins[pE.team] === 1, 'E 队应赢得第 1 回合');
-// 后续回合：每回合全灭 D → E 队赢下大局（先 13 回合）
+// 后续回合：每回合全灭 D → E 队赢下大局（先 13 回合）；同时验证上回合存活者（E）满血回出生点
 let roundsWon = 1;
 while (duelGame.duel.winnerTeam === null && roundsWon < 13) {
+  // 打伤存活者 E，验证下一回合会被重置
+  pE.mech.chest = 50;
+  pE.pos.x = 33; pE.pos.z = -33;
   duelGame.duel.roundOverAt = Date.now();
   duelGame.tick(); // 进入下一回合（重置）
   assert(duelGame.duel.phase === 'play', '应开始新回合');
-  duelGame.tick(); // 全员复活
+  duelGame.tick(); // 全员复活/重置
   assert(pD.alive, '新回合应复活（每回合重置一条命）');
+  assert(pE.alive && pE.mech.chest === pE.mech.chestMax, '上回合存活者应满血重置');
+  assert(pE.pos.x !== 33 || pE.pos.z !== -33, '上回合存活者应回出生点（不再原地）');
   duelGame.damageModule(pD, MODULE_CORE, 9999, 'E', Date.now());
   pD.respawnAt = Date.now();
   duelGame.tick();

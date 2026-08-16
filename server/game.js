@@ -791,7 +791,7 @@ class Game {
     }
   }
 
-  // 下一回合：重置核心/玩家机甲，全员重新部署
+  // 下一回合：重置核心/玩家机甲，全员重新部署（含上回合存活者：满血回出生点）
   startNextDuelRound(now) {
     const d = this.duel;
     d.round++;
@@ -805,6 +805,14 @@ class Game {
       p.mechIndex = 0;
       p.respawnAt = now; // 下一 tick 自动复活（玩家也可在机甲选择面板换机甲）
       p.burns.clear();
+      // 上回合存活者也重置：满血 + 回出生点（避免残血/原地继续）
+      if (p.alive) {
+        this.applyMech(p, p.mechs[Math.min(p.mechIndex, p.mechs.length - 1)] || p.mechs[0]);
+        const s = this.pickSpawn(isTeamMode(this.mode) ? p.team : null);
+        p.pos.x = s.x; p.pos.y = 0; p.pos.z = s.z;
+        p.vel.x = 0; p.vel.y = 0; p.vel.z = 0;
+        p.input.fire = false;
+      }
     }
     this.emit('duel:round', { round: d.round, roundWins: d.roundWins, winnerTeam: null, cause: 'start' });
     console.log(`[neon-arena][${this.roomId}] [duel] 第${d.round}回合开始`);

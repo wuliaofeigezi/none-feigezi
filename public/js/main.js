@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260906 · 守护者头顶固定防护罩模块+F点击切换；修复小地图镜像/移动抽搐(步频)/服务器卡顿(人机决策节流) · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260907 · 死斗回合结束存活者满血回出生点；小地图移右下避免与排行榜重叠；敌方名字仅锁定可见(含距离) · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -1888,9 +1888,9 @@ import * as THREE from './three.module.min.js';
     }
   }
 
-  // 小地图：每帧调用（轻量）
+  // 小地图：每帧调用（轻量；触屏右下角是开火键，隐藏避免遮挡）
   function drawMinimap() {
-    if (!minimap) return;
+    if (!minimap || isTouch) return;
     const ctx = minimap.getContext('2d');
     const w = minimap.width, h = minimap.height;
     drawMap(ctx, w, h, myPos.x, myPos.z, yaw, false);
@@ -2304,6 +2304,20 @@ import * as THREE from './three.module.min.js';
       // 旗手高亮（全图暴露位置）
       if (sp.carrying) { ensureCarrierRing(rp); rp.carrierRing.visible = true; }
       else if (rp.carrierRing) rp.carrierRing.visible = false;
+      // 名字显示规则：敌方名字仅在「自己被锁定该敌人」或「队友已锁定该敌人」时显示（含距离）
+      rp.lockDist = Math.hypot(sp.x - myPos.x, sp.z - myPos.z);
+      const enemy = !!(me && me.id && sp.id !== me.id && (!isTeamModeLocal(gameMode) || sp.team !== me.team));
+      let showName = true;
+      if (enemy) {
+        // 从 payload 直接取自身锁定（me.lockId 在同循环后才同步，避免用旧值）
+        const mySelf = me && payload.players.find((q) => q.id === me.id);
+        const lockedByMe = !!(mySelf && mySelf.lockId === sp.id);
+        const lockedByTeam = !!(me && isTeamModeLocal(gameMode) && payload.players.some(
+          (q) => q.id !== me.id && q.team === me.team && q.lockId === sp.id
+        ));
+        showName = lockedByMe || lockedByTeam;
+      }
+      updateRemoteLabel(rp, sp, showName);
     }
     for (const [id, rp] of remotePlayers) {
       if (!seen.has(id)) { removeRemotePlayer(id); }
@@ -3062,6 +3076,35 @@ import * as THREE from './three.module.min.js';
     const sp = new THREE.Sprite(mat);
     sp.scale.set(2.2, 0.55, 1);
     return sp;
+  }
+
+  function isTeamModeLocal(mode) { return mode === 'ctf' || mode === 'duel'; }
+
+  // 按锁定可见性重建远端玩家名字标签（敌方仅锁定可见，并附带距离）
+  function updateRemoteLabel(rp, sp, showName) {
+    if (!rp || !rp.label) return;
+    // 队友/自己始终显示；敌方锁定可见（含距离）
+    const visible = sp.alive !== false && showName;
+    rp.label.visible = visible;
+    if (!visible) return;
+    let text = rp.name || sp.name || '?';
+    const dist = Math.round(rp.lockDist || 0);
+    text += ' · ' + dist + 'm';
+    if (rp.labelText === text) return; // 内容未变不重建贴图
+    rp.labelText = text;
+    const c = rp.label.material.map.image;
+    if (c) {
+      const g = c.getContext('2d');
+      g.clearRect(0, 0, c.width, c.height);
+      g.font = 'bold 30px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.shadowColor = 'rgba(0,0,0,0.9)';
+      g.shadowBlur = 10;
+      g.fillStyle = '#ffffff';
+      g.fillText(text, 128, 32);
+      rp.label.material.map.needsUpdate = true;
+    }
   }
 
   function spawnProjMesh() {

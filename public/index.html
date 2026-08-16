@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260906"/>
+<link rel="stylesheet" href="css/style.css?v=20260907"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -151,7 +151,7 @@
   .kda-row .a{color:#ffd98a;text-align:center;}
 
   /* ===== 小地图 / 大地图 ===== */
-  #minimap{position:absolute;right:14px;top:14px;width:180px;height:180px;border:1px solid rgba(125,249,255,.35);border-radius:10px;background:rgba(5,10,25,.6);pointer-events:none;z-index:6;}
+  #minimap{position:absolute;right:14px;bottom:14px;width:180px;height:180px;border:1px solid rgba(125,249,255,.35);border-radius:10px;background:rgba(5,10,25,.6);pointer-events:none;z-index:6;}
   #bigMap{position:absolute;inset:0;background:rgba(3,6,15,.88);display:flex;align-items:center;justify-content:center;z-index:9;}
   #bigMapCanvas{width:min(92vh,92vw);height:min(92vh,92vw);border:1px solid #2b3a7a;border-radius:12px;background:#070d20;}
   .bm-hint{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);color:#9fb3e8;font-size:13px;background:rgba(10,13,30,.8);padding:6px 16px;border-radius:20px;border:1px solid #2b3a7a;}
@@ -176,7 +176,7 @@
   .mh-leg.destroyed span{color:#ff5c7a;}
 
   /* ===== 武器状态 HUD（醒目轮盘） ===== */
-  #weaponHud{position:absolute;right:16px;bottom:96px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;}
+  #weaponHud{position:absolute;right:16px;bottom:210px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;}
   .w-row{background:rgba(5,10,25,.82);border:2px solid rgba(125,249,255,.45);border-radius:10px;padding:7px 14px;min-width:200px;text-align:right;box-shadow:0 0 10px rgba(125,249,255,.12);}
   .w-row .wn{display:block;font-size:13px;font-weight:700;color:#fff;letter-spacing:.5px;}
   .w-row .ws{display:block;font-size:13px;font-weight:700;color:#7df9ff;margin-top:1px;}
@@ -490,8 +490,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260906"></script>
-<script src="js/neon-shared.js?v=20260906"></script>
-<script type="module" src="js/main.js?v=20260906"></script>
+<script src="js/socket.io.min.js?v=20260907"></script>
+<script src="js/neon-shared.js?v=20260907"></script>
+<script type="module" src="js/main.js?v=20260907"></script>
 </body>
 </html>
