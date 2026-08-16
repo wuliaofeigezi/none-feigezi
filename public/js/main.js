@@ -179,7 +179,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260908 · 死斗完善：回合结束暂停(禁止继续移动开火)+回合倒计时HUD+观战空格切换+中途加入立即出生 · 如加载旧版请强制刷新');
+  console.log('[NeonArena] build 20260909 · 死斗完善：出局不复活+回合暂停+断线宽限+中途加入立即出生+人机分边均衡 · 如加载旧版请强制刷新');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -1626,8 +1626,34 @@ import * as THREE from './three.module.min.js';
       msWeaponEdits = {};
       return;
     }
-    // 死斗：本回合已出局（lives<=0）→ 隐藏选择面板，进入观战；不弹选择
+    // 死斗：本回合已出局（lives<=0）
     if (gameMode === 'duel' && m.lives <= 0) {
+      if (duelState && duelState.phase === 'roundOver') {
+        // 回合结束：允许预选下回合机甲（只记录选择，不复活）
+        const list = (m.mechChoices || []).slice();
+        if (list.length) {
+          mechChoicesCache = list;
+          if (msSelected < 0 || !list.some((c) => c.index === msSelected)) msSelected = list[0].index;
+          el.classList.remove('hidden');
+          document.exitPointerLock && document.exitPointerLock();
+          fire = false;
+          touchFire = false;
+          btns.innerHTML = list.map((c) =>
+            '<button class="ms-btn' + (c.index === msSelected ? ' selected' : '') + '" data-i="' + c.index + '">' +
+            mechDisplayName(c.type) + '</button>').join('');
+          btns.querySelectorAll('.ms-btn').forEach((b) => {
+            b.addEventListener('click', () => {
+              msSelected = parseInt(b.dataset.i, 10);
+              btns.querySelectorAll('.ms-btn').forEach((x) => x.classList.toggle('selected', x === b));
+              renderMsWeapons();
+              beep(700, 0.05, 'triangle', 0.05);
+            });
+          });
+          renderMsWeapons();
+          startMsCountdown(0);
+          return;
+        }
+      }
       el.classList.add('hidden');
       clearInterval(msCountdownTimer);
       return;
@@ -1958,6 +1984,7 @@ import * as THREE from './three.module.min.js';
 
   function updateDuelHud(state) {
     if (!duelHud || !state) return;
+    duelState = state; // 缓存（机甲选择面板判断 phase 用）
     duelHud.classList.remove('hidden');
     // 显示本回合剩余时间（CS 式倒计时）
     const leftMs = Math.max(0, (state.roundEndsAt || 0) - Date.now());
@@ -2059,7 +2086,7 @@ import * as THREE from './three.module.min.js';
         + '（' + ctfRes.roundWins[0] + ' : ' + ctfRes.roundWins[1] + '）</div>';
     } else if (duelRes) {
       head = '<div class="ctf-match-result">' + (duelRes.winnerTeam === null ? '🤝 平局' : (duelRes.winnerTeam === 0 ? '🔴 红队' : '🔵 蓝队') + ' 获胜！')
-        + '（基地核心战）</div>';
+        + '（回合 ' + (duelRes.roundWins[0] || 0) + ' : ' + (duelRes.roundWins[1] || 0) + '）</div>';
     }
     gameOverStats.innerHTML = head + stats.map((s, i) => `
       <tr>

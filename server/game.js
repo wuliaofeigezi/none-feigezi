@@ -316,6 +316,7 @@ class Game {
       alive: false,      // 开局先选择机甲（局内选择），选定后才出生
       respawnAt: 0,
       respawnIn: 0,
+      hasSpawned: false, // 是否曾出生（8s 自动出生仅对从未出过生的玩家生效）
       grounded: true,
       input: { fwd: 0, strafe: 0, jump: false, fire: false },
       mechs,           // 机库配置 [{type, weapons}, ...]（死斗=两次生命）
@@ -502,10 +503,18 @@ class Game {
     if (!this.active || !p || !p.connected || !data) return;
     const idx = parseInt(data.index, 10);
     if (!Number.isInteger(idx) || idx < 0 || idx >= p.mechs.length) return;
-    // 死斗：一小局一条命，本回合死亡即出局观战，不可再选机甲复活（下一回合 startNextDuelRound 全员复活）
+    // 死斗：一小局一条命，本回合死亡即出局观战，不可再选机甲复活
     if (this.mode === 'duel') {
       if (p.usedMechs && p.usedMechs.has(idx)) return; // 已损毁的机甲不可再选
-      if (!p.alive && p.lives <= 0) return; // 本回合已出局
+      if (!p.alive && p.lives <= 0) {
+        // 回合结束（roundOver）阶段：允许预选下回合机甲（只记录选择，不复活）
+        if (this.duel && this.duel.phase === 'roundOver') {
+          p.mechIndex = idx;
+          this.sendMe(p);
+          return;
+        }
+        return; // 回合进行中出局：不可选
+      }
       if (p.alive) return;
     } else if (p.alive) {
       return; // 仅死亡等待复活时可换机甲
@@ -725,18 +734,12 @@ class Game {
     if (c.scores[carrier.team] >= CTF_CAPTURE_TARGET) this.endCtfRound(carrier.team);
   }
 
-  // ---------- 死斗模式（大局计分制：回合制，先赢 2 回合获胜） ----------
+  // ---------- 死斗模式（大局计分制：回合制，先赢 13 回合获胜） ----------
   updateDuel(now) {
     const d = this.duel;
     if (!d || d.winnerTeam !== null) return;
+    // roundOver 由 tick 的暂停分支处理（startNextDuelRound / max-rounds）；此处仅防御
     if (d.phase === 'roundOver') {
-      // 回合数上限（防僵局）：超过上限直接按回合胜场结束整场，胜负由 endGame 依 roundWins 统计
-      if (d.round >= DUEL_MAX_ROUNDS && d.roundWins[0] !== d.roundWins[1]) {
-        const w = d.roundWins[0] > d.roundWins[1] ? 0 : 1;
-        d.winnerTeam = w;
-        this.endGame(w);
-        return;
-      }
       if (now >= d.roundOverAt) this.startNextDuelRound(now);
       return;
     }
@@ -772,7 +775,9 @@ class Game {
     for (const p of this.players.values()) {
       if (this.mode === 'duel') {
         // 死斗：一小局一条命，死亡即出局观战；回合开始时全员复活
-        if (p.alive && p.connected) teamActive[p.team] = true;
+        // 断线宽限期内（15s）仍算活跃，避免一次网络波动直接判负
+        const inGrace = !p.connected && (now - p.leftAt) <= RECONNECT_GRACE_MS;
+        if (p.alive && (p.connected || inGrace)) teamActive[p.team] = true;
       } else {
         teamActive[p.team] = true;
       }
@@ -807,13 +812,21 @@ class Game {
     d.phase = 'play';
     d.roundEndsAt = now + DUEL_ROUND_MS;
     d.roundKills = [0, 0];
+    // 清空上一回合残留弹体，避免旧子弹命中新回合复活的玩家
+    this.projectiles = [];
+    this.shots = [];
+    this.beams = [];
+    this.explosions = [];
+    this.impacts = [];
+    this.hits = [];
     for (const b of d.bases) { b.coreAlive = true; b.deploy = 0; }
     for (const p of this.players.values()) {
       p.usedMechs.clear();
       p.lives = p.mechs.length;
-      p.mechIndex = 0;
+      // 保留玩家上一回合选的机甲（开局默认 0，回合间不变更选择）
       p.respawnAt = now; // 下一 tick 自动复活（玩家也可在机甲选择面板换机甲）
       p.burns.clear();
+      p.shield && (p.shield.active = false); // 重置护盾
       // 上回合存活者也重置：满血 + 回出生点（避免残血/原地继续）
       if (p.alive) {
         this.applyMech(p, p.mechs[Math.min(p.mechIndex, p.mechs.length - 1)] || p.mechs[0]);
@@ -843,7 +856,14 @@ class Game {
         sessionId: '',
         mechs: [{ type: ['humanoid', 'spider', 'guardian'][mechIdx], weapons: ['gau12', 'gau12', 'gau12'] }],
       };
-      const p = this.createPlayer(id, seed, this.players.size);
+      // 团队模式：补进人数少的一边，保持平衡
+      let seedIdx = this.players.size;
+      if (isTeamMode(this.mode)) {
+        const counts = [0, 0];
+        for (const q of this.players.values()) counts[q.team]++;
+        seedIdx = counts[0] <= counts[1] ? 0 : 1;
+      }
+      const p = this.createPlayer(id, seed, seedIdx);
       p.isBot = true;
       p.botBrain = { retargetAt: 0, wanderAt: 0, wanderYaw: Math.random() * Math.PI * 2, nextThinkAt: 0, lastLock: null };
       this.players.set(id, p);
@@ -939,7 +959,10 @@ class Game {
       id: p.id, name: p.name, color: p.color, team: p.team,
       map: MAP, self: this.pubMe(p), resumed: false, mode: this.mode,
     });
-    this.respawn(p);
+    // 死斗：被替换 Bot 若本回合已出局 → 真人保持观战（下一回合统一复活），不立即出生
+    if (!(this.mode === 'duel' && this.duel && this.duel.phase === 'play' && bot.lives <= 0)) {
+      this.respawn(p);
+    }
     this.sendMe(p);
     this.emit('playerJoined', { id: p.id, name: p.name, team: p.team });
     console.log(`[neon-arena][${this.roomId}] 🧍 ${p.name} 替代人机入场（${p.mechType}）`);
@@ -988,7 +1011,18 @@ class Game {
     if (this.mode === 'duel' && this.duel && this.duel.phase === 'roundOver') {
       // 死斗回合结束停留期：暂停物理/武器，避免回合结束后还能移动开火
       const d = this.duel;
-      if (now >= d.roundOverAt) this.startNextDuelRound(now);
+      if (now >= d.roundOverAt) {
+        // 回合数上限（防僵局）：比分相等则按本回合击杀判定，避免无限循环
+        if (d.round >= DUEL_MAX_ROUNDS) {
+          const w = d.roundWins[0] === d.roundWins[1]
+            ? (d.roundKills[0] === d.roundKills[1] ? null : (d.roundKills[0] > d.roundKills[1] ? 0 : 1))
+            : (d.roundWins[0] > d.roundWins[1] ? 0 : 1);
+          d.winnerTeam = w;
+          this.endGame(w);
+          return;
+        }
+        this.startNextDuelRound(now);
+      }
       this.broadcast(now);
       return;
     }
@@ -1002,11 +1036,14 @@ class Game {
       // Bot AI 驱动输入（真人死亡后也可被替换，不在此处理）
       if (p.isBot && p.alive) this.updateBot(p, dt, now);
       if (!p.alive) {
+        // 死斗：本回合已出局（lives<=0）→ 不复活，保持观战直到下一回合（startNextDuelRound 统一重置）
+        if (this.mode === 'duel' && p.lives <= 0) { continue; }
         if (p.respawnAt && now >= p.respawnAt) this.respawn(p);
-        // 开局选择机甲超时（8s）未选：自动以默认机甲出生
-        else if (!p.respawnAt && now - this.startedAt > 8000) this.respawn(p);
+        // 开局选择机甲超时（8s）未选：自动以默认机甲出生（仅适用于从未出过生的玩家）
+        else if (!p.respawnAt && now - this.startedAt > 8000 && !p.hasSpawned) this.respawn(p);
         continue;
       }
+      p.hasSpawned = true;
       this.physics(p, dt);
       this.updateWeapons(p, dt, now);
       this.updateShield(p, dt, now);
@@ -1523,6 +1560,7 @@ class Game {
     p.vel.x = 0; p.vel.y = 0; p.vel.z = 0;
     p.alive = true;
     p.respawnAt = 0;
+    p.hasSpawned = true;
     p.input.fire = false; // 复活时重置开火，避免卡键连续射击
     this.sendMe(p);
   }

@@ -501,6 +501,46 @@ midGame.attachPlayer('PM', { name: 'Late', sessionId: 's_pm', mechs: [{ type: 's
 const pPM = midGame.players.get('PM');
 assert(pPM.alive && pPM.mechType === 'spider', '中途加入死斗应立即出生');
 
+// ---- 15d. 防僵局：25 回合后比分相等也结束（不再无限循环） ----
+const S1 = fakeSocket('S1');
+const S2 = fakeSocket('S2');
+const staleGame = new Game(io, 'room_stale', { mode: 'duel', maxPlayers: 8, matchMinutes: 5 }, {});
+staleGame.start([
+  { socketId: 'S1', name: 'S1', sessionId: 's_s1', mechs: [{ type: 'humanoid', weapons: [] }] },
+  { socketId: 'S2', name: 'S2', sessionId: 's_s2', mechs: [{ type: 'humanoid', weapons: [] }] },
+]);
+clearInterval(staleGame.timer);
+staleGame.timer = null;
+staleGame.onMechSelect('S1', { index: 0 });
+staleGame.onMechSelect('S2', { index: 0 });
+// 连续打平 25 回合（每回合双方自爆 → 同归于尽 → 平局）→ 应触发 max-rounds 结束
+let staleR = 0;
+let guard = 0;
+while (staleGame.active && staleR < 30 && guard++ < 4000) {
+  const p1 = staleGame.players.get('S1');
+  const p2 = staleGame.players.get('S2');
+  if (staleGame.duel && staleGame.duel.phase === 'play') {
+    if (p1.alive && p2.alive) {
+      // 自爆（击杀者=自己）不计本回合击杀 → 每回合 0:0 平局，才能走到 25 回合上限
+      staleGame.damageModule(p1, MODULE_CORE, 9999, 'S1', Date.now());
+      staleGame.damageModule(p2, MODULE_CORE, 9999, 'S2', Date.now());
+    }
+    if (staleGame.duel.phase === 'play' && !p1.alive && !p2.alive) {
+      // 同归于尽：强制推进到回合到时，由 updateDuel 按击杀数判定（0:0 → 平局下一回合）
+      staleGame.duel.roundEndsAt = Date.now() - 1;
+    }
+    staleGame.tick();
+  } else if (staleGame.duel && staleGame.duel.phase === 'roundOver') {
+    staleGame.duel.roundOverAt = Date.now() - 1;
+    staleGame.tick();
+    staleR++;
+  } else {
+    staleGame.tick();
+  }
+}
+assert(staleGame.active === false, '25 回合平局后应结束整场（防僵局）');
+assert(staleGame.duel.round >= 25, '应到达回合上限（round=' + staleGame.duel.round + '）');
+
 // ---- 16. 断线重连恢复（Game 层）：同 sessionId 恢复原玩家，并返回旧 socketId ----
 game.onLeave('A');
 assert(!game.players.get('A').connected, '断线后 connected 应为 false');
