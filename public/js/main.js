@@ -1329,11 +1329,21 @@ import * as THREE from './three.module.min.js';
     });
   }
 
-  // 第三人称自机模型（不带武器挂载，避免遮挡视野）
+  // 第三人称自机模型（缩小 + 半透明，避免遮挡视野）
   function buildSelfModel() {
     if (selfModel) { scene.remove(selfModel); selfModel = null; }
     if (!me) return;
     selfModel = buildMechModel(me.mechType, { color: new THREE.Color(me.color) });
+    selfModel.scale.setScalar(0.92);
+    selfModel.traverse((o) => {
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          m.transparent = true;
+          m.opacity = 0.88;
+        }
+      }
+    });
     scene.add(selfModel);
     selfLastX = myPos.x; selfLastZ = myPos.z;
   }
@@ -2050,20 +2060,26 @@ import * as THREE from './three.module.min.js';
       spectateCamera(dt);
       if (selfModel) selfModel.visible = false;
     } else {
-      // 和平精英式第三人称：相机更高更靠后、看向玩家前上方，机甲位于画面下部中央，不遮挡视野
-      const camDist = 5.6, camHgt = 3.2;
+      // 和平精英式第三人称：相机高且远、看向玩家前上方，机甲位于画面下部中央
+      const camDist = 7.0, camHgt = 4.4;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
-      const camPos = collideCamera(
-        px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.8, pz + Math.cos(yaw) * cpc * camDist,
-        px, py + 1.5, pz
+      let camPos = collideCamera(
+        px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.45, pz + Math.cos(yaw) * cpc * camDist,
+        px, py + 1.6, pz
       );
+      // 相机被地形挡住拉近时：抬高越过障碍，避免机甲糊脸遮挡
+      if (Math.hypot(camPos.x - px, camPos.z - pz) < 3.2) {
+        camPos.y = py + 7.0;
+        camPos.x = px + Math.sin(yaw) * cpc * 2.0;
+        camPos.z = pz + Math.cos(yaw) * cpc * 2.0;
+      }
       camera.position.lerp(camPos, Math.min(1, 14 * dt));
       if (camShake > 0) {
         camera.position.x += (Math.random() - 0.5) * camShake * 0.5;
         camera.position.y += (Math.random() - 0.5) * camShake * 0.5;
         camShake = Math.max(0, camShake - dt * 10);
       }
-      camera.lookAt(px - Math.sin(yaw) * 6, py + 2.0 + spc * 6, pz - Math.cos(yaw) * 6);
+      camera.lookAt(px - Math.sin(yaw) * 10, py + 1.6 + spc * 8, pz - Math.cos(yaw) * 10);
 
       // ===== 自机机甲模型（第三人称可见） =====
       if (selfModel) {
