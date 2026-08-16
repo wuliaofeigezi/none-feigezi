@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260820"/>
+<link rel="stylesheet" href="css/style.css?v=20260821"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -287,6 +287,8 @@
       <button id="pauseContinueBtn" class="btn btn-primary">继续游戏</button>
       <button id="pauseSuicideBtn" class="btn btn-danger">💥 自杀</button>
       <button id="pauseLeaveBtn" class="btn">离开对局</button>
+      <button id="pauseMusicBtn" class="btn">🎵 音乐：开</button>
+      <button id="pauseSfxBtn" class="btn">🔊 音效：开</button>
     </div>
   </div>
   <!-- 局内选择机甲（开局/死亡后可换机甲再部署；选择期间不可移动攻击） -->
@@ -334,6 +336,7 @@
       <button id="battleBtn" class="btn btn-primary">⚔ 战斗</button>
       <button id="quickJoinBtn" class="btn">⚡ 快速加入</button>
       <button id="refreshRoomsBtn" class="btn">🔄 刷新</button>
+      <button id="musicBtn" class="btn" title="背景音乐开关">🎵 音乐</button>
     </div>
     <div class="mode-btns" id="modeBtns">
       <button class="mode-btn active" data-mode="duel">⚔ 死斗</button>
@@ -418,8 +421,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260820"></script>
-<script src="js/neon-shared.js?v=20260820"></script>
-<script type="module" src="js/main.js?v=20260820"></script>
+<script src="js/socket.io.min.js?v=20260821"></script>
+<script src="js/neon-shared.js?v=20260821"></script>
+<script type="module" src="js/main.js?v=20260821"></script>
 </body>
 </html>

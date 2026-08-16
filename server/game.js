@@ -1505,7 +1505,7 @@ class Game {
         alive: p.alive, connected: p.connected, kills: p.kills, deaths: p.deaths, score: p.score,
       });
     }
-    const projs = this.projectiles.map((pr) => ({ kind: pr.kind, x: pr.x, y: pr.y, z: pr.z }));
+    const projs = this.projectiles.map((pr) => ({ kind: pr.kind, x: pr.x, y: pr.y, z: pr.z, owner: pr.owner }));
     const pickups = this.pickups.map((pk) => ({ id: pk.id, x: pk.x, z: pk.z, active: pk.active }));
     let ctf = null;
     if (this.mode === 'ctf' && this.ctf) {

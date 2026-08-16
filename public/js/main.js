@@ -4,8 +4,166 @@ import * as THREE from './three.module.min.js';
 (function () {
   'use strict';
 
+  // =========================================================
+  // 音频（WebAudio 程序化合成：背景音乐 + 武器/命中音效，无需外部文件）
+  // =========================================================
+  const AUDIO = {
+    ctx: null, musicOn: true, sfxOn: true,
+    musicTimer: null, nextT: 0, step: 0,
+    laserSnd: null, // 激光持续音节点
+    lastOwnLoiter: 0,
+  };
+  // 音乐：合成波风格循环（Am-F-C-G），120BPM，八分音符步进
+  const MUSIC_CHORDS = [
+    [220.0, 261.63, 329.63, 440.0],   // Am
+    [174.61, 220.0, 261.63, 349.23],  // F
+    [130.81, 196.0, 261.63, 329.63],  // C
+    [196.0, 246.94, 293.66, 392.0],   // G
+  ];
+  const MUSIC_STEP = 60 / 120 / 2; // 八分音符时长
+
+  function ensureAudio() {
+    if (!AUDIO.ctx) {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        AUDIO.ctx = new AC();
+      } catch (e) { return null; }
+    }
+    if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume().catch(() => {});
+    return AUDIO.ctx;
+  }
+
+  function tone(freq, dur, type, vol, freqEnd, lp) {
+    const ctx = AUDIO.ctx;
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type || 'square';
+    o.frequency.setValueAtTime(freq, t0);
+    if (freqEnd) o.frequency.exponentialRampToValueAtTime(freqEnd, t0 + dur);
+    g.gain.setValueAtTime(vol || 0.05, t0);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+    if (lp) {
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass'; f.frequency.value = lp;
+      o.connect(g); g.connect(f); f.connect(ctx.destination);
+    } else { o.connect(g); g.connect(ctx.destination); }
+    o.start(t0); o.stop(t0 + dur + 0.03);
+  }
+
+  function noiseAt(t, dur, vol, fType, fFreq) {
+    const ctx = AUDIO.ctx;
+    if (!ctx) return;
+    const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const f = ctx.createBiquadFilter();
+    f.type = fType || 'lowpass';
+    f.frequency.value = fFreq || 2000;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol || 0.08, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    src.connect(f); f.connect(g); g.connect(ctx.destination);
+    src.start(t);
+  }
+
+  // 背景音乐调度器
+  function startMusic() {
+    const ctx = ensureAudio();
+    if (!ctx || !AUDIO.musicOn || AUDIO.musicTimer) return;
+    AUDIO.nextT = ctx.currentTime + 0.1;
+    AUDIO.step = 0;
+    AUDIO.musicTimer = setInterval(() => {
+      if (!AUDIO.ctx || !AUDIO.musicOn) return;
+      while (AUDIO.nextT < AUDIO.ctx.currentTime + 0.15) {
+        scheduleMusicStep(AUDIO.step, AUDIO.nextT);
+        AUDIO.nextT += MUSIC_STEP;
+        AUDIO.step = (AUDIO.step + 1) % 64;
+      }
+    }, 50);
+  }
+  function stopMusic() {
+    clearInterval(AUDIO.musicTimer);
+    AUDIO.musicTimer = null;
+  }
+  function scheduleMusicStep(step, t) {
+    const ctx = AUDIO.ctx;
+    const bar = Math.floor(step / 16) % 4;
+    const s = step % 16;
+    const chord = MUSIC_CHORDS[bar];
+    // 贝斯（每拍根音）
+    if (s % 4 === 0) tone(chord[0] / 2, MUSIC_STEP * 2, 'square', 0.05, null, 320);
+    // 琶音（八分音符）
+    const note = chord[s % chord.length] * (s === 4 || s === 12 ? 2 : 1);
+    tone(note, MUSIC_STEP * 0.9, 'triangle', 0.035, null, 2600);
+    // 鼓
+    if (s === 0 || s === 8) tone(120, 0.12, 'sine', 0.09, 42);           // Kick
+    if (s === 4 || s === 12) noiseAt(t, 0.1, 0.05, 'highpass', 1500);    // 军鼓
+    if (s % 2 === 1) noiseAt(t, 0.03, 0.02, 'highpass', 6000);           // 踩镲
+  }
+
+  // ---- 武器/战斗音效 ----
+  function sfxGau12() {
+    if (!AUDIO.sfxOn || !AUDIO.ctx) return;
+    noiseAt(AUDIO.ctx.currentTime, 0.05, 0.045, 'lowpass', 2800);
+    tone(150 + Math.random() * 40, 0.06, 'square', 0.018, 80, 800);
+  }
+  function updateLaserSound(active) {
+    const ctx = ensureAudio();
+    if (!ctx || !AUDIO.sfxOn) { if (laserCleanup) laserCleanup(); return; }
+    if (active && !AUDIO.laserSnd) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const f = ctx.createBiquadFilter();
+      o.type = 'sawtooth';
+      o.frequency.value = 640 + Math.random() * 80;
+      f.type = 'lowpass'; f.frequency.value = 1000;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.04, ctx.currentTime + 0.08);
+      o.connect(g); g.connect(f); f.connect(ctx.destination);
+      o.start();
+      AUDIO.laserSnd = { o, g };
+    } else if (!active && AUDIO.laserSnd) {
+      const t = ctx.currentTime;
+      AUDIO.laserSnd.g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+      AUDIO.laserSnd.o.stop(t + 0.12);
+      AUDIO.laserSnd = null;
+    }
+  }
+  function laserCleanup() {
+    if (AUDIO.laserSnd) {
+      try { AUDIO.laserSnd.o.stop(); } catch (e) { /* ignore */ }
+      AUDIO.laserSnd = null;
+    }
+  }
+  function sfxLoiter() {
+    if (!AUDIO.sfxOn || !AUDIO.ctx) return;
+    const t = AUDIO.ctx.currentTime;
+    noiseAt(t, 0.4, 0.06, 'lowpass', 900);
+    tone(300, 0.35, 'sawtooth', 0.03, 1400, 1200); // 升调哨声
+  }
+  function sfxExplosion() {
+    if (!AUDIO.sfxOn || !AUDIO.ctx) return;
+    noiseAt(AUDIO.ctx.currentTime, 0.5, 0.12, 'lowpass', 600);
+    tone(90, 0.4, 'sine', 0.12, 35);
+  }
+  function toggleMusic() {
+    AUDIO.musicOn = !AUDIO.musicOn;
+    if (AUDIO.musicOn) startMusic(); else stopMusic();
+    return AUDIO.musicOn;
+  }
+  function toggleSfx() {
+    AUDIO.sfxOn = !AUDIO.sfxOn;
+    if (!AUDIO.sfxOn) laserCleanup();
+    return AUDIO.sfxOn;
+  }
+
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260820 · 泰坦/猎蛛 · 多枪口弹幕 · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260821 · 音乐/音效 · 如加载旧版请强制刷新/清除缓存');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -13,7 +171,7 @@ import * as THREE from './three.module.min.js';
     lobbyPage = $('lobbyPage'), roomPage = $('roomPage'), gameOverPage = $('gameOverPage'),
     lobbyName = $('lobbyName'), connStatus = $('connStatus'),
     roomListEl = $('roomList'),
-    battleBtn = $('battleBtn'), modeBtns = $('modeBtns'),
+    battleBtn = $('battleBtn'), modeBtns = $('modeBtns'), musicBtn = $('musicBtn'),
     mechPreview0 = $('mechPreview0'), mechPreview1 = $('mechPreview1'),
     weaponSlots0 = $('weaponSlots0'), weaponSlots1 = $('weaponSlots1'),
     quickJoinBtn = $('quickJoinBtn'), refreshRoomsBtn = $('refreshRoomsBtn'),
@@ -47,6 +205,7 @@ import * as THREE from './three.module.min.js';
     // 暂停 / 自杀
     pauseMenu = $('pauseMenu'), pauseContinueBtn = $('pauseContinueBtn'),
     pauseSuicideBtn = $('pauseSuicideBtn'), pauseLeaveBtn = $('pauseLeaveBtn'),
+    pauseMusicBtn = $('pauseMusicBtn'), pauseSfxBtn = $('pauseSfxBtn'),
     suicideBar = $('suicideBar'), suicideFill = $('suicideFill'),
     lockBox = $('lockBox'), lockDist = $('lockDist'), dmgFlash = $('dmgFlash'),
     teamAlive = $('teamAlive'), taRed = $('taRed'), taBlue = $('taBlue'), taScore = $('taScore'),
@@ -1296,6 +1455,8 @@ import * as THREE from './three.module.min.js';
   function resetGame() {
     started = false;
     me = null;
+    AUDIO.lastOwnLoiter = 0;
+    laserCleanup();
     if (selfModel) { scene.remove(selfModel); selfModel = null; }
     lockTargetId = null;
     spectateId = null;
@@ -1609,6 +1770,14 @@ import * as THREE from './three.module.min.js';
     updateExplosions(payload.explosions, TICK_MS / 1000);
     if (payload.impacts) {
       for (const im of payload.impacts) spawnSparks(im.x, im.y, im.z, 3);
+    }
+    // 音效：激光束持续音 / 巡飞弹齐射哨声 / 爆炸轰鸣
+    if (me) {
+      updateLaserSound((payload.beams || []).some((b) => b.owner === me.id));
+      const ownLoiters = (payload.projectiles || []).filter((p) => p.kind === 'loiter' && p.owner === me.id).length;
+      if (ownLoiters > AUDIO.lastOwnLoiter) sfxLoiter();
+      AUDIO.lastOwnLoiter = ownLoiters;
+      if (payload.explosions && payload.explosions.length > 0) sfxExplosion();
     }
     // 死斗 HUD（基地核心部署进度 / 剩余机甲）
     if (gameMode === 'duel' && payload.duel) updateDuelHud(payload.duel);
@@ -2491,6 +2660,19 @@ import * as THREE from './three.module.min.js';
     if (mechSelect) mechSelect.classList.add('hidden');
     clearInterval(msCountdownTimer);
   });
+  // 音乐 / 音效开关
+  if (pauseMusicBtn) pauseMusicBtn.addEventListener('click', () => {
+    const on = toggleMusic();
+    pauseMusicBtn.textContent = '🎵 音乐：' + (on ? '开' : '关');
+  });
+  if (pauseSfxBtn) pauseSfxBtn.addEventListener('click', () => {
+    const on = toggleSfx();
+    pauseSfxBtn.textContent = '🔊 音效：' + (on ? '开' : '关');
+  });
+  if (musicBtn) musicBtn.addEventListener('click', () => {
+    const on = toggleMusic();
+    musicBtn.textContent = '🎵 音乐' + (on ? '' : '：关');
+  });
 
   // 准星瞄准点：相机视线（屏幕中心）延伸 20m 的世界坐标，随输入上报给服务器
   // 20m 使多枪口弹幕更早合拢命中；方向与更远距离一致（都在准星射线上）
@@ -2521,6 +2703,10 @@ import * as THREE from './three.module.min.js';
       yaw, pitch,
       aimX: aim.x, aimY: aim.y, aimZ: aim.z,
     });
+    // 开火音效：按住开火且有机关炮时播放短促枪声（约 20 发/秒）
+    if ((fire || touchFire) && me && me.weapons && me.weapons.some((w) => w.type === 'gau12')) {
+      sfxGau12();
+    }
   }, TICK_MS);
 
   // 延迟
@@ -2538,6 +2724,10 @@ import * as THREE from './three.module.min.js';
   function init() {
     applyOrientation(); // 手机端竖屏自动旋转为横屏
     initHangar();       // 机库：模式选择 / 机甲预览 / 模块安装
+    // 首次用户交互后启动背景音乐（浏览器自动播放策略要求用户手势）
+    const startMusicOnce = () => { ensureAudio(); startMusic(); };
+    document.addEventListener('click', startMusicOnce, { once: true });
+    document.addEventListener('keydown', startMusicOnce, { once: true });
     if (isTouch) {
       // 手机端：显示触控 UI 并替换操作说明
       touchUI.classList.remove('hidden');
