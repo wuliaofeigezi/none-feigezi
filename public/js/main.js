@@ -2148,7 +2148,7 @@ import * as THREE from './three.module.min.js';
       if (selfModel) selfModel.visible = false;
     } else {
       // 和平精英式第三人称：相机高且远、看向玩家前上方，机甲位于画面下部中央
-      const camDist = 7.0, camHgt = 2.2;
+      const camDist = 9.0, camHgt = 2.2;
       const cpc = Math.cos(pitch), spc = Math.sin(pitch);
       let camPos = collideCamera(
         px + Math.sin(yaw) * cpc * camDist, py + camHgt - spc * camDist * 0.45, pz + Math.cos(yaw) * cpc * camDist,
@@ -2454,7 +2454,18 @@ import * as THREE from './three.module.min.js';
     clearInterval(msCountdownTimer);
   });
 
-  // 输入上报（死亡/投票/暂停期间持续上报零输入；复活瞬间输入立即生效）
+  // 准星瞄准点：相机视线（屏幕中心）延伸 50m 的世界坐标，随输入上报给服务器
+  function computeAimPoint() {
+    if (!camera) {
+      const cp = Math.cos(pitch), sp = Math.sin(pitch);
+      return { x: myPos.x - Math.sin(yaw) * cp * 50, y: myPos.y + 1.6 + sp * 50, z: myPos.z - Math.cos(yaw) * cp * 50 };
+    }
+    const v = new THREE.Vector3();
+    camera.getWorldDirection(v);
+    return { x: camera.position.x + v.x * 50, y: camera.position.y + v.y * 50, z: camera.position.z + v.z * 50 };
+  }
+
+  // 输入上报（死亡/投票/暂停/选择机甲期间持续上报零输入；复活瞬间输入立即生效）
   setInterval(() => {
     if (!socket || !started || !me) return;
     if (ctfVoting() || pauseOpen || mechSelecting()) {
@@ -2462,12 +2473,14 @@ import * as THREE from './three.module.min.js';
       socket.emit('input', { fwd: 0, strafe: 0, jump: false, fire: false, yaw, pitch });
       return;
     }
+    const aim = computeAimPoint();
     socket.emit('input', {
       fwd: inputFwd(),
       strafe: inputStrafe(),
       jump: inputJump(),
       fire: fire || touchFire,
       yaw, pitch,
+      aimX: aim.x, aimY: aim.y, aimZ: aim.z,
     });
   }, TICK_MS);
 

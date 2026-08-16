@@ -402,6 +402,10 @@ class Game {
       p.input.fire = !!data.fire && !this.isFlagCarrier(p.id);
       if (Number.isFinite(data.yaw)) p.yaw = data.yaw;
       if (Number.isFinite(data.pitch)) p.pitch = clamp(data.pitch, -1.5, 1.5);
+      // 准星瞄准点（第三人称下与相机视线一致），未索敌时武器朝它开火
+      if (Number.isFinite(data.aimX) && Number.isFinite(data.aimY) && Number.isFinite(data.aimZ)) {
+        p.aim = { x: data.aimX, y: data.aimY, z: data.aimZ };
+      }
     }
   }
 
@@ -810,6 +814,11 @@ class Game {
         const tx = locked.pos.x - origin.x, ty = (locked.pos.y + 0.9) - origin.y, tz = locked.pos.z - origin.z;
         const tl = Math.hypot(tx, ty, tz) || 1;
         dx = tx / tl; dy = ty / tl; dz = tz / tl;
+      } else if (p.aim) {
+        // 未索敌：朝准星瞄准点开火（与第三人称准星一致）
+        const tx = p.aim.x - origin.x, ty = p.aim.y - origin.y, tz = p.aim.z - origin.z;
+        const tl = Math.hypot(tx, ty, tz) || 1;
+        dx = tx / tl; dy = ty / tl; dz = tz / tl;
       } else {
         const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
         dx = -Math.sin(p.yaw) * cp; dy = sp; dz = -Math.cos(p.yaw) * cp;
@@ -845,8 +854,16 @@ class Game {
         player: locked, part: lm.part, legIndex: lm.legIndex,
       };
     } else {
-      const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
-      const dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+      let dir;
+      if (p.aim) {
+        // 未索敌：光束朝准星瞄准点
+        const tx = p.aim.x - origin.x, ty = p.aim.y - origin.y, tz = p.aim.z - origin.z;
+        const tl = Math.hypot(tx, ty, tz) || 1;
+        dir = { x: tx / tl, y: ty / tl, z: tz / tl };
+      } else {
+        const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
+        dir = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
+      }
       hit = this.rayHit(origin, dir, 60, p);
     }
     this.beams.push({
@@ -900,6 +917,10 @@ class Game {
         // 索敌锁定：巡飞弹直接飞向锁定目标当前位置（仍带小散布）
         gx = locked.pos.x;
         gz = locked.pos.z;
+      } else if (p.aim) {
+        // 未索敌：朝准星瞄准点
+        gx = p.aim.x;
+        gz = p.aim.z;
       } else {
         // 瞄准点：视线与地面交点
         const tGround = (dir.y < -0.01) ? (-origin.y / dir.y) : 60;

@@ -248,6 +248,19 @@ const typeBefore = pA.mechType; // pA 当前存活（蜘蛛）
 game.onMechSelect('A', { index: 0 });
 assert(pA.mechType === typeBefore, '存活状态不应允许换机甲');
 
+// ---- 14.8 准星瞄准点：未索敌时子弹朝准星方向开火（即使 yaw/pitch 指向别处） ----
+setWeapon(pA, 'gau12');
+input(B, {}); // B 静止，避免跑出准星点
+place(pA, 0, 12);
+place(pB, 0, 16);
+A.trigger('input', { fwd: 0, strafe: 0, jump: false, fire: true, yaw: 0, pitch: 0, aimX: 0, aimY: 1, aimZ: 16 });
+const aimSum0 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
+for (let i = 0; i < 40; i++) game.tick();
+A.trigger('input', { fwd: 0, strafe: 0, jump: false, fire: false, yaw: 0, pitch: 0 });
+const aimSum1 = pB.mech.legs.reduce((a, b) => a + b, 0) + pB.mech.chest;
+console.log('准星瞄准命中后模块总血量:', aimSum1, '<', aimSum0);
+assert(aimSum1 < aimSum0, '未索敌时子弹应朝准星瞄准点开火');
+
 // ---- 15. 死斗模式：两次生命 + 基地核心判定 ----
 const D = fakeSocket('D');
 const E = fakeSocket('E');
