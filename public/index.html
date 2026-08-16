@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>霓虹竞技场 Neon Arena — 3D 联机射击</title>
-<link rel="stylesheet" href="css/style.css?v=20260824"/>
+<link rel="stylesheet" href="css/style.css?v=20260825"/>
 <style>
   /* ===== 大厅 / 房间 / 结算 页面（霓虹主题） ===== */
   .page{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -113,12 +113,15 @@
   .mech-name{text-align:center;font-size:14px;font-weight:700;color:#7dd3fc;margin:8px 0 6px;}
   .weapon-slots{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;}
   .weapon-slot{flex:1;min-width:70px;padding:5px 6px;border-radius:6px;border:1px solid #33408f;background:#101432;color:#cfe0ff;font-size:11px;cursor:pointer;text-align:center;transition:.15s;}
+  .weapon-slot:hover{border-color:#5a7bff;background:#18204e;}
+  .weapon-slot.sel{border-color:#7df9ff;background:#12344f;box-shadow:0 0 6px #2fd6ff66;}
   .weapon-slot:hover{border-color:#4f6bff;background:#141a42;}
   .weapon-slot .ws-name{display:block;font-weight:700;font-size:11px;}
   .weapon-slot .ws-type{display:block;font-size:9px;color:#8fa3d8;}
   .weapon-slot.w-gau12 .ws-name{color:#7df9ff;}
   .weapon-slot.w-laser .ws-name{color:#ff9db8;}
   .weapon-slot.w-loiter .ws-name{color:#ffd98a;}
+  .weapon-detail{margin-top:8px;padding:6px 8px;border-radius:6px;background:#101432;border:1px solid #2b3a7a;font-size:11px;color:#9fb3e8;line-height:1.5;min-height:16px;}
 
   /* ===== 顶部存活人数 / 大局比分 ===== */
   #teamAlive{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center;pointer-events:none;z-index:6;}
@@ -348,11 +351,13 @@
         <div class="mech-preview" id="mechPreview0"></div>
         <div class="mech-name">🤖 泰坦</div>
         <div class="weapon-slots" id="weaponSlots0"></div>
+        <div class="weapon-detail" id="weaponDetail0"></div>
       </div>
       <div class="mech-card" id="mechCard1">
         <div class="mech-preview" id="mechPreview1"></div>
         <div class="mech-name">🕷 猎蛛</div>
         <div class="weapon-slots" id="weaponSlots1"></div>
+        <div class="weapon-detail" id="weaponDetail1"></div>
       </div>
     </div>
     <div id="roomList" class="room-list"></div>
@@ -421,8 +426,8 @@
 
 </div>
 
-<script src="js/socket.io.min.js?v=20260824"></script>
-<script src="js/neon-shared.js?v=20260824"></script>
-<script type="module" src="js/main.js?v=20260824"></script>
+<script src="js/socket.io.min.js?v=20260825"></script>
+<script src="js/neon-shared.js?v=20260825"></script>
+<script type="module" src="js/main.js?v=20260825"></script>
 </body>
 </html>

@@ -172,7 +172,7 @@ import * as THREE from './three.module.min.js';
   }
 
   // ===== 启动版本标记（浏览器控制台可确认加载到哪一版） =====
-  console.log('[NeonArena] build 20260824 · 激光持续伤害/移速翻倍/音乐总线/楼梯修正 · 如加载旧版请强制刷新/清除缓存');
+  console.log('[NeonArena] build 20260825 · 机库武器详情栏 · 如加载旧版请强制刷新/清除缓存');
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -183,6 +183,7 @@ import * as THREE from './three.module.min.js';
     battleBtn = $('battleBtn'), modeBtns = $('modeBtns'), musicBtn = $('musicBtn'),
     mechPreview0 = $('mechPreview0'), mechPreview1 = $('mechPreview1'),
     weaponSlots0 = $('weaponSlots0'), weaponSlots1 = $('weaponSlots1'),
+    weaponDetail0 = $('weaponDetail0'), weaponDetail1 = $('weaponDetail1'),
     quickJoinBtn = $('quickJoinBtn'), refreshRoomsBtn = $('refreshRoomsBtn'),
     roomTitle = $('roomTitle'), roomCode = $('roomCode'), copyCodeBtn = $('copyCodeBtn'),
     leaveRoomBtn = $('leaveRoomBtn'), roomSettings = $('roomSettings'),
@@ -632,13 +633,17 @@ import * as THREE from './three.module.min.js';
     const el = slotIdx === 0 ? weaponSlots0 : weaponSlots1;
     if (!el) return;
     const cfg = mechConfigs[slotIdx];
+    // 点击槽位时展示该武器详情；默认展示第 1 个槽
+    if (!cfg.userData) cfg.userData = {};
+    if (cfg.userData.detailSlot === undefined) cfg.userData.detailSlot = 0;
     el.innerHTML = cfg.weapons.map((w, i) =>
-      '<button class="weapon-slot w-' + w + '" data-i="' + i + '" title="点击切换武器">' +
+      '<button class="weapon-slot w-' + w + (i === cfg.userData.detailSlot ? ' sel' : '') + '" data-i="' + i + '" title="点击切换武器">' +
       '<span class="ws-name">' + WEAPON_LABEL[w][0] + '</span>' +
       '<span class="ws-type">' + WEAPON_LABEL[w][1] + '</span></button>').join('');
     el.querySelectorAll('.weapon-slot').forEach((btn) => {
       btn.addEventListener('click', () => {
         const i = parseInt(btn.dataset.i, 10);
+        cfg.userData.detailSlot = i;
         cfg.weapons[i] = WEAPON_ORDER[(WEAPON_ORDER.indexOf(cfg.weapons[i]) + 1) % WEAPON_ORDER.length];
         renderWeaponSlots(slotIdx);
         if (hangarModels[slotIdx] && hangarModels[slotIdx].userData.mounts) {
@@ -649,6 +654,34 @@ import * as THREE from './three.module.min.js';
         }
       });
     });
+    // 武器详情栏
+    const det = slotIdx === 0 ? weaponDetail0 : weaponDetail1;
+    if (det) {
+      const w = cfg.weapons[cfg.userData.detailSlot] || cfg.weapons[0];
+      det.innerHTML = weaponDetailHtml(w);
+    }
+  }
+
+  function weaponDetailHtml(w) {
+    const W = NS.WEAPONS[w];
+    if (!W) return '';
+    const rows = ['<b>' + (WEAPON_LABEL[w][0] || w) + '</b>'];
+    if (w === 'gau12') {
+      rows.push('射速 ' + W.rpm + ' 发/分');
+      rows.push('单发伤害 ' + W.dmg);
+      rows.push('弹匣 ' + W.mag + ' 发');
+      rows.push('装填 ' + (W.reloadMs / 1000).toFixed(1) + ' 秒');
+    } else if (w === 'laser') {
+      rows.push('照射伤害 ' + W.dmgPerSec + ' /秒');
+      rows.push('满充能 ' + (W.chargeFullMs / 1000).toFixed(1) + ' 秒');
+      rows.push('持续照射上限 ' + (W.maxBeamMs / 1000).toFixed(1) + ' 秒');
+    } else if (w === 'loiter') {
+      rows.push('齐射 ' + W.volley + ' 发');
+      rows.push('单发伤害 ' + W.dmg);
+      rows.push('爆炸半径 ' + W.blastRadius + ' 米');
+      rows.push('装填 ' + (W.reloadMs / 1000).toFixed(1) + ' 秒');
+    }
+    return rows.join(' · ');
   }
 
   function setupHangarPreviews() {
@@ -759,11 +792,11 @@ import * as THREE from './three.module.min.js';
     const visor = box(0.3, 0.08, 0.05, stdMat(0x7df9ff, 0x22d3ee, { emissiveIntensity: 0.9 }));
     visor.position.set(0, 1.8, 0.21);
     g.add(visor);
-    // 肩部装甲 + 4 战斗模块槽：两侧各上下两个（上部落于肩膀上，下部落于肩膀侧）
+    // 肩部装甲 + 4 战斗模块槽：两侧肩上一个，顶部（头顶）两个
     const mounts = [];
     const mountPos = [
-      [-0.72, 1.68, 0.14], [0.72, 1.68, 0.14],  // 上部：落于肩膀上
-      [-0.9, 1.38, 0], [0.9, 1.38, 0],          // 下部：落于肩膀侧
+      [-0.72, 1.68, 0.14], [0.72, 1.68, 0.14],  // 肩部左右
+      [-0.35, 2.0, 0.05], [0.35, 2.0, 0.05],    // 头顶左右（原肩侧移到头顶）
     ];
     for (let i = 0; i < mountPos.length; i++) {
       const [mx, my, mz] = mountPos[i];
@@ -2263,12 +2296,16 @@ import * as THREE from './three.module.min.js';
   function inputStrafe() { return clamp((keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0) + joy.strafe, -1, 1); }
   function inputJump() { return !!keys['Space'] || (jumpQueuedAt && performance.now() - jumpQueuedAt < 200); }
 
-  // 本地预测倍率（与服务端 cfg/旗手惩罚/机甲基础移速保持一致，避免预测漂移导致视角闪回）
+  // 本地预测倍率（与服务端 cfg/旗手惩罚/机甲基础移速/腿部损毁减速保持一致，避免预测漂移导致视角闪回）
   function localMoveMul() {
     let m = 1;
     if (me && me.carrying) m *= 0.5;                    // 旗手移速减半
     if (me && me.mechType && NS.MECHS[me.mechType]) {
-      m *= NS.MECHS[me.mechType].moveMul || 1;          // 机甲基础移速（人形减缓75%）
+      m *= NS.MECHS[me.mechType].moveMul || 1;          // 机甲基础移速
+    }
+    // 腿部损毁减速（服务端 legMul）——缺失会导致预测跑快、服务器反复拉回、视角颤抖
+    if (me && me.mech && me.mech.legsDestroyed != null && me.mechType) {
+      m *= NS.mechSpeedMul(me.mechType, me.mech.legsDestroyed);
     }
     const card = ctfState && ctfState.applied;
     if (card && card.id === 'speed') m *= 1.5;          // 疾风
